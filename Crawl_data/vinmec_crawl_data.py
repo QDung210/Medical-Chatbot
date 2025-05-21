@@ -35,8 +35,9 @@ def timing_decorator(func):
     return sync_wrapper
 
 class VinmecScraper:
-    def __init__(self, base_url, output_file="all_articles.json", max_concurrency=5):
+    def __init__(self, base_url, tag, output_file="all_articles.json", max_concurrency=5):
         self.base_url = base_url
+        self.tag = tag  # Add tag property to the scraper
         self.output_file = output_file
         self.articles = []
         self.user_agents = [
@@ -105,14 +106,15 @@ class VinmecScraper:
         # Remove booking text
         text = re.sub(r'Để đặt lịch khám tại viện,.*?ứng dụng\.', '', text)
         
-        return {'url': url, 'title': title, 'content': text}
+        # Include the tag in the article dictionary
+        return {'url': url, 'title': title, 'content': text, 'tag': self.tag}
     
     async def scrape_article(self, session, link):
         html = await self.get_page(session, link)
         if html:
             article = self.extract_article_content(html, link)
             if article:
-                print(f"Scraped: {article['title']}")
+                print(f"Scraped: {article['title']} [Tag: {article['tag']}]")
                 return article
         return None
     
@@ -144,7 +146,7 @@ class VinmecScraper:
                 articles = [article for article in results if article is not None]
                 self.articles.extend(articles)
                 
-                print(f"Page {page_num}: Found {len(articles)} articles")
+                print(f"Page {page_num}: Found {len(articles)} articles with tag '{self.tag}'")
                 
                 # Brief delay between pages to be nice to the server
                 await asyncio.sleep(1)
@@ -155,23 +157,68 @@ class VinmecScraper:
         return self.articles
 
 async def main():
-    base_urls = ["https://www.vinmec.com/vie/tim-mach/page_0",
-                "https://www.vinmec.com/vie/thong-tin-suc-khoe/page_0",
-                "https://www.vinmec.com/vie/trung-tam-cham-soc-suc-khoe-tinh-than/page_0",
-                "https://www.vinmec.com/vie/trung-tam-mat/page_0"
-                ]
-    output_path = r"C:\Users\Admin\Documents\vinmec\second.json"
+    # Define the URLs and their corresponding tags as separate lists to ensure correct matching
+    base_urls = [
+        "https://www.vinmec.com/vie/chan-thuong-chinh-hinh-y-hoc-the-thao/page_0",
+        "https://www.vinmec.com/vie/trung-tam-cong-nghe-cao/page_0",
+        "https://www.vinmec.com/vie/trung-tam-suc-khoe-phu-nu/page_0",
+        "https://www.vinmec.com/vie/trung-tam-nhi/page_0",
+        "https://www.vinmec.com/vie/trung-tam-vu/page_0",
+        "https://www.vinmec.com/vie/suc-khoe-tong-quat/page_0",
+        "https://www.vinmec.com/vie/than-kinh/page_0",
+        "https://www.vinmec.com/vie/tieu-hoa-gan-mat/page_0",
+        "https://www.vinmec.com/vie/tim-mach/page_0",
+        "https://www.vinmec.com/vie/thong-tin-suc-khoe/page_0",
+        "https://www.vinmec.com/vie/trung-tam-cham-soc-suc-khoe-tinh-than/page_0",
+        "https://www.vinmec.com/vie/trung-tam-mat/page_0",
+        "https://www.vinmec.com/vie/ung-buou/page_0",
+        "https://www.vinmec.com/vie/trung-tam-vac-xin/page_0",
+        "https://www.vinmec.com/vie/te-bao-goc-va-cong-nghe-gen/page_0",
+        "https://www.vinmec.com/vie/y-hoc-co-truyen/page_0",
+        "https://www.vinmec.com/vie/tham-my/page_0",
+        "https://www.vinmec.com/vie/dich-covid-19/page_0",
+        "https://www.vinmec.com/vie/dinh-duong/page_0",
+        "https://www.vinmec.com/vie/song-khoe/page_0",
+        "https://www.vinmec.com/vie/mien-dich-di-ung/page_0"
+    ]
+    
+    tags = [
+        "Chấn thương chỉnh hình - Y khoa",
+        "Công nghệ cao",
+        "Sức khỏe phụ nữ",
+        "Nhi khoa",
+        "Vú",
+        "Sức khỏe tổng quát",
+        "Thần kinh",
+        "Tiêu hóa gan mật",
+        "Tim mạch",
+        "Thông tin sức khỏe",
+        "Sức khỏe tinh thần",
+        "Mắt",
+        "Ung bướu",
+        "Vắc xin",
+        "Tế bào gốc và công nghệ gen",
+        "Y học cổ truyền",
+        "Thẩm mỹ",
+        "Covid-19",
+        "Dinh dưỡng",
+        "Sống khỏe",
+        "Miễn dịch dị ứng"
+    ]
+    
+    output_path = r"C:\Users\Admin\Documents\vinmec\scraped_articles\all_articles.json"
     
     start_time = time.time()
     
     # Collect all articles from all URLs
     all_articles = []
     
-    for url in base_urls:
-        scraper = VinmecScraper(url, output_path, max_concurrency=5)
+    # Use zip to iterate through both lists together
+    for url, tag in zip(base_urls, tags):
+        scraper = VinmecScraper(url, tag, output_path, max_concurrency=5)
         articles = await scraper.scrape(start_page=0)
         all_articles.extend(articles)
-        print(f"Collected {len(articles)} articles from {url}")
+        print(f"Collected {len(articles)} articles with tag '{tag}' from {url}")
     
     # Save all articles to JSON file directly without metadata
     with open(output_path, 'w', encoding='utf-8') as f:
@@ -184,4 +231,4 @@ async def main():
 
 if __name__ == "__main__":
     # Run the async main function
-    asyncio.run(main()) 
+    asyncio.run(main())
