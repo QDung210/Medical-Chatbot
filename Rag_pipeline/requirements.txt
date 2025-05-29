@@ -1,2 +1,0 @@
-transformers==4.48.3
-torch --index-url https://download.pytorch.org/whl/cu118

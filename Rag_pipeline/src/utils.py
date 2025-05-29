@@ -25,16 +25,18 @@ def get_root_dir() -> str:
         )
     return project_root
 
-def get_model_dir(model_name: str = "google/gemma-3-4b-it") -> str:
-    """Get directory of the saved LLM model
+def get_model_dir(model_name: str = None) -> str:
+    """Get directory of the saved LLM model (deprecated - using Groq API instead)
 
     Args:
-        model_name (str, optional): Model name on [Hugging Face](https://huggingface.co/google/gemma-3-4b-it). 
-        Defaults to "google/gemma-3-4b-it".
+        model_name (str, optional): Model name for local storage.
+        Note: This function is deprecated as we're using Groq API for LLM inference.
 
     Returns:
-        str: _description_
+        str: Model directory path
     """
+    if model_name is None:
+        return os.path.join(get_root_dir(), "rag-pipeline/models/")
     model_dir = os.path.join(get_root_dir(), "rag-pipeline/models/" + model_name)
     return model_dir
 
