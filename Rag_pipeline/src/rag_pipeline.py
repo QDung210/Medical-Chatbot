@@ -12,12 +12,14 @@ logger = logging.getLogger(__name__)
 # Global pipeline instance for singleton pattern
 _global_pipeline = None
 
+def create_rag_pipeline(collection_name="medical_data", model_name=None):
+    """Create and return RAG pipeline instance"""
+    return MedicalRAGPipeline(collection_name=collection_name, model_name=model_name)
+
 class MedicalRAGPipeline:
-    def __init__(self, qdrant_storage_path="./qdrant_storage", collection_name="medical_data", model_name=None):
+    def __init__(self, collection_name="medical_data", model_name=None):
         """Initialize Medical RAG Pipeline"""
         self.collection_name = collection_name
-        # Use relative path for better compatibility
-        self.qdrant_storage_path = qdrant_storage_path
         self.model_name = model_name or 'llama-3.3-70b-versatile'
         
         # Initialize components
@@ -40,21 +42,21 @@ class MedicalRAGPipeline:
         self.embedding_model = load_embedding_model()
         
         # 2. Connect to Qdrant
-        logger.info(f"🗄️ Connecting to Qdrant at: {self.qdrant_storage_path}")
-        self.qdrant_client = connect_to_qdrant(self.qdrant_storage_path)
-        
+        logger.info("🗄️ Connecting to Qdrant...")
+        self.qdrant_client = connect_to_qdrant()
         if not self.qdrant_client:
-            logger.warning("⚠️ Qdrant connection issue, but continuing...")
-            # Don't raise exception, just log warning
-        else:
-            # 3. Setup retriever
-            logger.info("🔍 Setting up retriever...")
-            self.retriever = get_qdrant_retriever(
-                client=self.qdrant_client,
-                collection_name=self.collection_name,
-                embedding_model=self.embedding_model,
-                top_k=3
-            )
+            logger.error("⚠️ Failed to connect to Qdrant! Please check your QDRANT_CLOUD_URL and QDRANT_API_KEY in .env file")
+            raise Exception("Cannot connect to Qdrant Cloud. Please set QDRANT_CLOUD_URL and QDRANT_API_KEY environment variables.")
+        logger.info("🗄️ Connected to Qdrant!")
+        
+        # 3. Setup retriever
+        logger.info("🔍 Setting up retriever...")
+        self.retriever = get_qdrant_retriever(
+            client=self.qdrant_client,
+            collection_name=self.collection_name,
+            embedding_model=self.embedding_model,
+            top_k=3
+        )
         
         # 4. Load LLM
         logger.info(f"🤖 Loading LLM: {self.model_name}")
@@ -65,23 +67,6 @@ class MedicalRAGPipeline:
         self.llm_pipeline = create_llm_pipeline(llm_config)
         
         logger.info("✅ RAG Pipeline setup completed!")
-    
-    def change_model(self, new_model_name: str):
-        """Change the LLM model"""
-        if new_model_name != self.model_name:
-            logger.info(f"🔄 Changing model from {self.model_name} to {new_model_name}")
-            self.model_name = new_model_name
-            
-            # Reload only the LLM part
-            llm_config = load_llm_model(model_name=self.model_name)
-            if llm_config['type'] == 'groq':
-                self.llm_pipeline = create_llm_pipeline(llm_config)
-                logger.info(f"✅ Model changed to {new_model_name}")
-                return True
-            else:
-                logger.error(f"❌ Failed to change model: {llm_config.get('message')}")
-                return False
-        return True
     
     def search_documents(self, query: str, limit: int = 3) -> List[Dict]:
         """Search relevant documents"""
@@ -168,8 +153,7 @@ TRẢ LỜI:"""
             if not self.qdrant_client:
                 return {
                     'status': 'error', 
-                    'message': 'Qdrant client not connected. Check if qdrant_storage path exists.',
-                    'qdrant_path': self.qdrant_storage_path
+                    'message': 'Qdrant client not connected. Check QDRANT_CLOUD_URL and QDRANT_API_KEY.'
                 }
             
             collections = self.qdrant_client.get_collections().collections
@@ -184,9 +168,10 @@ TRẢ LỜI:"""
                 return {
                     'status': 'active',
                     'collection_name': self.collection_name,
-                    'vector_count': collection_info.points_count,
+                    'vector_count': getattr(collection_info, 'points_count', 0),
                     'embedding_model': 'strongpear/M3-retriever-MEDICAL',
-                    'llm_model': self.model_name
+                    'llm_model': self.model_name,
+                    'connection_type': 'Qdrant Cloud'
                 }
             else:
                 return {
@@ -213,7 +198,7 @@ TRẢ LỜI:"""
         self.cleanup()
 
 # Convenience function
-def create_rag_pipeline(qdrant_path="./qdrant_storage", model_name=None) -> MedicalRAGPipeline:
+def create_rag_pipeline(collection_name="medical_data", model_name=None) -> MedicalRAGPipeline:
     """Create and return RAG pipeline instance with singleton pattern"""
     global _global_pipeline
     
@@ -237,7 +222,7 @@ def create_rag_pipeline(qdrant_path="./qdrant_storage", model_name=None) -> Medi
     
     # Create new pipeline
     logger.info("🆕 Creating new RAG pipeline")
-    _global_pipeline = MedicalRAGPipeline(qdrant_storage_path=qdrant_path, model_name=model_name)
+    _global_pipeline = MedicalRAGPipeline(collection_name=collection_name, model_name=model_name)
     return _global_pipeline
 
 if __name__ == "__main__":

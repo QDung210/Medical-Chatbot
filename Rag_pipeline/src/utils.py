@@ -39,4 +39,3 @@ def get_model_dir(model_name: str = None) -> str:
         return os.path.join(get_root_dir(), "rag-pipeline/models/")
     model_dir = os.path.join(get_root_dir(), "rag-pipeline/models/" + model_name)
     return model_dir
-

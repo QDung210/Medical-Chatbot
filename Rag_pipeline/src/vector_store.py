@@ -5,39 +5,23 @@ from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
-def connect_to_qdrant(storage_path="./qdrant_storage"):
-    """Connect to local Qdrant instance"""
-    try:
-        # Normalize the path first
-        storage_path = os.path.normpath(os.path.abspath(storage_path))
-        
-        if not os.path.exists(storage_path):
-            logger.error(f"Qdrant storage path does not exist: {storage_path}")
-            return None
-            
-        client = QdrantClient(path=storage_path)
-        logger.info(f"Connected to Qdrant at: {storage_path}")
-        
-        # Try to get collections but don't fail if none exist
+def connect_to_qdrant():
+    """Connect to Qdrant Cloud if env vars are set, else báo lỗi."""
+    cloud_url = os.getenv('QDRANT_CLOUD_URL')
+    api_key = os.getenv('QDRANT_API_KEY')
+    if cloud_url and api_key:
         try:
-            collections = client.get_collections().collections
-            if collections:
-                logger.info(f"Found {len(collections)} collections")
-                for coll in collections:
-                    logger.info(f"  - {coll.name}")
-            else:
-                logger.warning("No collections found in Qdrant")
+            logger.info(f"🌐 Connecting to Qdrant Cloud: {cloud_url}")
+            client = QdrantClient(url=cloud_url, api_key=api_key, timeout=30, prefer_grpc=False)
+            # Test connection
+            collections = client.get_collections()
+            logger.info(f"✅ Connected to Qdrant Cloud successfully! Collections: {[c.name for c in collections.collections]}")
+            return client
         except Exception as e:
-            logger.warning(f"Could not list collections: {e}")
-        
-        return client
-        
-    except Exception as e:
-        error_msg = str(e)
-        if "already accessed by another instance" in error_msg:
-            logger.error(f"Qdrant database is locked by another instance. Please close other applications using Qdrant at: {storage_path}")
-        else:
-            logger.error(f"Failed to connect to Qdrant: {e}")
+            logger.error(f"❌ Failed to connect to Qdrant Cloud: {e}")
+            return None
+    else:
+        logger.error("❌ Qdrant Cloud credentials not found in environment variables.")
         return None
 
 def get_qdrant_retriever(client, collection_name="medical_data", embedding_model=None, top_k=5):

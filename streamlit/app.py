@@ -2,11 +2,20 @@ import streamlit as st
 import sys
 import os
 import atexit
+from dotenv import load_dotenv
+import requests
 
 # Add the RAG pipeline to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'rag_pipeline', 'src'))
 
 from rag_pipeline import create_rag_pipeline
+
+# Đường dẫn tuyệt đối tới file .env trong rag_pipeline
+abs_env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'rag_pipeline', '.env'))
+if os.path.exists(abs_env_path):
+    load_dotenv(abs_env_path)
+
+print("GROQ_API_KEY:", os.getenv("GROQ_API_KEY"))
 
 # Cleanup function for session end
 def cleanup_session():
@@ -73,13 +82,15 @@ if 'selected_model' not in st.session_state:
 if 'rag_pipeline' not in st.session_state:
     with st.spinner('🔄 Đang khởi tạo hệ thống AI...'):
         try:
-            # Use correct absolute path to qdrant_storage
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            qdrant_path = os.path.normpath(os.path.join(current_dir, '..', 'qdrant_storage'))
-            st.session_state.rag_pipeline = create_rag_pipeline(qdrant_path=qdrant_path, model_name=st.session_state.selected_model)
+            # Create pipeline with Qdrant Cloud
+            st.session_state.rag_pipeline = create_rag_pipeline(
+                collection_name='medical_data',
+                model_name=st.session_state.selected_model
+            )
             st.success('✅ Hệ thống AI đã sẵn sàng!')
         except Exception as e:
             st.error(f'❌ Lỗi khởi tạo: {str(e)}')
+            st.error('Vui lòng kiểm tra QDRANT_CLOUD_URL và QDRANT_API_KEY trong file .env')
             st.session_state.rag_pipeline = None
 
 # Main header
@@ -122,9 +133,10 @@ with st.sidebar:
                         st.error('❌ Không thể chuyển model!')
                 else:
                     # Create new pipeline with new model
-                    current_dir = os.path.dirname(os.path.abspath(__file__))
-                    qdrant_path = os.path.normpath(os.path.join(current_dir, '..', 'qdrant_storage'))
-                    st.session_state.rag_pipeline = create_rag_pipeline(qdrant_path=qdrant_path, model_name=new_model)
+                    st.session_state.rag_pipeline = create_rag_pipeline(
+                        collection_name='medical_data',
+                        model_name=new_model
+                    )
                     st.session_state.selected_model = new_model
                     st.success(f'✅ Đã khởi tạo {new_model}!')
                     st.rerun()
@@ -137,6 +149,7 @@ with st.sidebar:
         stats = st.session_state.rag_pipeline.get_stats()
         if stats['status'] == 'active':
             st.success("🟢 Đang hoạt động")
+            st.metric("☁️ Kết nối", stats.get('connection_type', 'Unknown'))
             st.metric("📊 Tài liệu y tế", f"{stats['vector_count']:,}")
             st.metric("🤖 AI Model", stats['llm_model'])
             st.metric("🔍 Embedding", stats['embedding_model'].split('/')[-1])
@@ -146,6 +159,10 @@ with st.sidebar:
             st.error(f"Chi tiết lỗi: {stats}")
             if 'message' in stats:
                 st.error(f"Thông báo: {stats['message']}")
+            
+            # Show available collections if any
+            if 'available_collections' in stats:
+                st.warning(f"Collections có sẵn: {', '.join(stats['available_collections'])}")
     else:
         st.error("🔴 Chưa kết nối")
     
@@ -195,30 +212,40 @@ for message in st.session_state.messages:
                 st.markdown("**📚 Nguồn tham khảo:**")
                 sources = message["sources"]
                 
+                def dedup_sources(sources, min_score=0.7):
+                    # Lọc trùng theo (title, url), giữ lại bản có score cao nhất và score >= min_score
+                    unique = {}
+                    for src in sources:
+                        score = src.get('score', 0)
+                        if score < min_score:
+                            continue
+                        metadata = src.get('metadata', {})
+                        title = metadata.get('title', metadata.get('name', ''))
+                        url = metadata.get('url', metadata.get('source', metadata.get('link', '')))
+                        key = (title, url)
+                        if key not in unique or score > unique[key].get('score', 0):
+                            unique[key] = src
+                    return list(unique.values())
+                
+                sources = dedup_sources(sources, min_score=0.7)
                 for i, source in enumerate(sources, 1):
                     metadata = source.get('metadata', {})
                     score = source.get('score', 0)
-                    
-                    # Extract URL and title from metadata
                     url = metadata.get('url', metadata.get('source', metadata.get('link', '')))
                     title = metadata.get('title', metadata.get('name', f'Tài liệu {i}'))
-                    
-                    # Use columns for better layout
                     col1, col2 = st.columns([4, 1])
-                    
                     with col1:
                         if url:
                             st.markdown(f"📄 [{title}]({url})")
                         else:
                             st.markdown(f"📄 {title}")
-                            # Show content preview if no URL
                             content_preview = source.get('content', '')[:100] + "..." if len(source.get('content', '')) > 100 else source.get('content', '')
                             st.caption(content_preview)
                     
                     with col2:
                         st.caption(f"Độ liên quan: {score:.2f}")
                     
-                    if i < len(sources):  # Add separator except for last item
+                    if i < len(sources):
                         st.divider()
 
 # Chat input
@@ -296,30 +323,40 @@ if prompt := st.chat_input("Đặt câu hỏi về sức khỏe của bạn...")
                         st.markdown("**📚 Nguồn tham khảo:**")
                         sources = result["sources"]
                         
+                        def dedup_sources(sources, min_score=0.7):
+                            # Lọc trùng theo (title, url), giữ lại bản có score cao nhất và score >= min_score
+                            unique = {}
+                            for src in sources:
+                                score = src.get('score', 0)
+                                if score < min_score:
+                                    continue
+                                metadata = src.get('metadata', {})
+                                title = metadata.get('title', metadata.get('name', ''))
+                                url = metadata.get('url', metadata.get('source', metadata.get('link', '')))
+                                key = (title, url)
+                                if key not in unique or score > unique[key].get('score', 0):
+                                    unique[key] = src
+                            return list(unique.values())
+                        
+                        sources = dedup_sources(sources, min_score=0.7)
                         for i, source in enumerate(sources, 1):
                             metadata = source.get('metadata', {})
                             score = source.get('score', 0)
-                            
-                            # Extract URL and title from metadata
                             url = metadata.get('url', metadata.get('source', metadata.get('link', '')))
                             title = metadata.get('title', metadata.get('name', f'Tài liệu {i}'))
-                            
-                            # Use columns for better layout
                             col1, col2 = st.columns([4, 1])
-                            
                             with col1:
                                 if url:
                                     st.markdown(f"📄 [{title}]({url})")
                                 else:
                                     st.markdown(f"📄 {title}")
-                                    # Show content preview if no URL
                                     content_preview = source.get('content', '')[:100] + "..." if len(source.get('content', '')) > 100 else source.get('content', '')
                                     st.caption(content_preview)
                             
                             with col2:
                                 st.caption(f"Độ liên quan: {score:.2f}")
                             
-                            if i < len(sources):  # Add separator except for last item
+                            if i < len(sources):
                                 st.divider()
                 
             except Exception as e:
@@ -333,4 +370,15 @@ st.markdown("""
 <div style="text-align: center; color: #666; font-size: 0.9rem;">
     🏥 Trợ lý Y tế AI | Tác giả Đỗ Quốc Dũng| Made with ❤️ for Healthcare
 </div>
-""", unsafe_allow_html=True) 
+""", unsafe_allow_html=True)
+
+# Test Groq API
+api_key = os.getenv("GROQ_API_KEY")
+print("GROQ_API_KEY:", api_key)
+response = requests.get(
+    'https://api.groq.com/openai/v1/models',
+    headers={'Authorization': f'Bearer {api_key}'},
+    timeout=10
+)
+print("Status code:", response.status_code)
+print("Response:", response.text) 
