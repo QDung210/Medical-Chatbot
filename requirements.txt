@@ -1,0 +1,15 @@
+# Core dependencies
+streamlit==1.31.0
+python-dotenv==1.0.0
+requests==2.31.0
+
+# RAG Pipeline dependencies
+sentence-transformers==2.2.2
+qdrant-client==1.7.0
+torch==2.1.0
+
+# Data Crawling (optional)
+beautifulsoup4==4.12.2
+
+# Optional: for CUDA support on Windows
+# torch==2.1.0+cu118  # Uncomment nếu muốn sử dụng CUDA trên Windows 

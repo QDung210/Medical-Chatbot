@@ -1,83 +1,73 @@
-import os
 import logging
-from typing import List, Dict
-from model_setup import load_llm_model, create_llm_pipeline, load_embedding_model
-from vector_store import connect_to_qdrant, get_qdrant_retriever
-import atexit
+from typing import Dict, List, Optional
+import requests
+from rag_pipeline.src.model_setup import ModelManager
+from rag_pipeline.src.vector_store import VectorStore
+from rag_pipeline.src.config import (
+    DEFAULT_COLLECTION, DEFAULT_MODEL, DEFAULT_TOP_K,
+    DEFAULT_MAX_TOKENS, EMBEDDING_MODEL
+)
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global pipeline instance for singleton pattern
-_global_pipeline = None
-
-def create_rag_pipeline(collection_name="medical_data", model_name=None):
-    """Create and return RAG pipeline instance"""
-    return MedicalRAGPipeline(collection_name=collection_name, model_name=model_name)
-
 class MedicalRAGPipeline:
-    def __init__(self, collection_name="medical_data", model_name=None):
-        """Initialize Medical RAG Pipeline"""
+    def __init__(
+        self,
+        collection_name: str = DEFAULT_COLLECTION,
+        model_name: str = DEFAULT_MODEL
+    ):
+        """Khởi tạo Medical RAG Pipeline"""
         self.collection_name = collection_name
-        self.model_name = model_name or 'llama-3.3-70b-versatile'
+        self.model_name = model_name
         
-        # Initialize components
+        # Khởi tạo các thành phần
         self.embedding_model = None
-        self.qdrant_client = None
+        self.vector_store = None
         self.retriever = None
         self.llm_pipeline = None
         
         self._setup_pipeline()
-        
-        # Register cleanup on exit
-        atexit.register(self.cleanup)
     
-    def _setup_pipeline(self):
-        """Setup all pipeline components"""
-        logger.info("🔄 Setting up Medical RAG Pipeline...")
-        
-        # 1. Load embedding model
-        logger.info("📊 Loading embedding model...")
-        self.embedding_model = load_embedding_model()
-        
-        # 2. Connect to Qdrant
-        logger.info("🗄️ Connecting to Qdrant...")
-        self.qdrant_client = connect_to_qdrant()
-        if not self.qdrant_client:
-            logger.error("⚠️ Failed to connect to Qdrant! Please check your QDRANT_CLOUD_URL and QDRANT_API_KEY in .env file")
-            raise Exception("Cannot connect to Qdrant Cloud. Please set QDRANT_CLOUD_URL and QDRANT_API_KEY environment variables.")
-        logger.info("🗄️ Connected to Qdrant!")
-        
-        # 3. Setup retriever
-        logger.info("🔍 Setting up retriever...")
-        self.retriever = get_qdrant_retriever(
-            client=self.qdrant_client,
-            collection_name=self.collection_name,
-            embedding_model=self.embedding_model,
-            top_k=3
-        )
-        
-        # 4. Load LLM
-        logger.info(f"🤖 Loading LLM: {self.model_name}")
-        llm_config = load_llm_model(model_name=self.model_name)
-        if llm_config['type'] != 'groq':
-            raise Exception(f"LLM loading failed: {llm_config.get('message', 'Unknown error')}")
-        
-        self.llm_pipeline = create_llm_pipeline(llm_config)
-        
-        logger.info("✅ RAG Pipeline setup completed!")
+    def _setup_pipeline(self) -> None:
+        """Thiết lập các thành phần của pipeline"""
+        try:
+            # 1. Tải embedding model
+            self.embedding_model = ModelManager.load_embedding_model()
+            
+            # 2. Khởi tạo vector store
+            self.vector_store = VectorStore()
+            if not self.vector_store.client:
+                raise Exception("Không thể kết nối tới Vector Store")
+            
+            # 3. Thiết lập retriever
+            self.retriever = self.vector_store.create_retriever(
+                collection_name=self.collection_name,
+                embedding_model=self.embedding_model,
+                top_k=DEFAULT_TOP_K
+            )
+            
+            # 4. Tải LLM
+            llm_config = ModelManager.load_llm_model(model_name=self.model_name)
+            if llm_config['type'] != 'groq':
+                raise Exception(f"Lỗi tải LLM: {llm_config.get('message', 'Lỗi không xác định')}")
+            
+            self.llm_pipeline = ModelManager.create_llm_pipeline(llm_config)
+            
+            logger.info("✅ Đã thiết lập RAG Pipeline thành công!")
+            
+        except Exception as e:
+            logger.error(f"Lỗi thiết lập pipeline: {e}")
+            raise
     
-    def search_documents(self, query: str, limit: int = 3) -> List[Dict]:
-        """Search relevant documents"""
+    def _search_documents(self, query: str, limit: int = DEFAULT_TOP_K) -> List[Dict]:
+        """Tìm kiếm tài liệu liên quan"""
         if not self.retriever:
             return []
-        
-        results = self.retriever(query, limit=limit)
-        return results
+        return self.retriever(query, limit=limit)
     
-    def generate_context_prompt(self, query: str, documents: List[Dict]) -> str:
-        """Generate context-aware prompt"""
+    def _generate_context_prompt(self, query: str, documents: List[Dict]) -> str:
+        """Tạo prompt với context"""
         if not documents:
             context = "Không tìm thấy tài liệu liên quan."
         else:
@@ -86,10 +76,9 @@ class MedicalRAGPipeline:
                 content = doc.get('content', '')
                 score = doc.get('score', 0)
                 context_parts.append(f"[Tài liệu {i}] (Độ tương đồng: {score:.2f})\n{content}\n")
-            
             context = "\n".join(context_parts)
         
-        prompt = f"""Bạn là một trợ lý y tế thông minh. Hãy trả lời câu hỏi dựa trên thông tin y tế được cung cấp.
+        return f"""Bạn là một trợ lý y tế thông minh. Hãy trả lời câu hỏi dựa trên thông tin y tế được cung cấp.
 
 THÔNG TIN Y TẾ:
 {context}
@@ -104,42 +93,39 @@ HƯỚNG DẪN:
 - Trả lời chi tiết và dễ hiểu
 
 TRẢ LỜI:"""
-        
-        return prompt
     
-    def query(self, question: str, max_tokens: int = 1024, stream: bool = False) -> Dict:
-        """Main RAG query function"""
+    def query(
+        self,
+        question: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        stream: bool = False
+    ) -> Dict:
+        """Hàm chính để truy vấn RAG"""
         try:
-            # 1. Search relevant documents
-            logger.info(f"🔍 Searching for: {question}")
-            documents = self.search_documents(question)
+            # 1. Tìm kiếm tài liệu
+            documents = self._search_documents(question)
             
-            # 2. Generate context prompt
-            prompt = self.generate_context_prompt(question, documents)
+            # 2. Tạo prompt với context
+            prompt = self._generate_context_prompt(question, documents)
             
-            # 3. Generate response
-            logger.info("🤖 Generating response...")
+            # 3. Sinh câu trả lời
             response = self.llm_pipeline(prompt, max_tokens=max_tokens, stream=stream)
             
+            result = {
+                'question': question,
+                'sources': documents,
+                'context_used': len(documents) > 0
+            }
+            
             if stream:
-                # Return streaming response with context
-                return {
-                    'question': question,
-                    'answer_stream': response,
-                    'sources': documents,
-                    'context_used': len(documents) > 0
-                }
+                result['answer_stream'] = response
             else:
-                # Regular response
-                return {
-                    'question': question,
-                    'answer': response,
-                    'sources': documents,
-                    'context_used': len(documents) > 0
-                }
+                result['answer'] = response
+                
+            return result
             
         except Exception as e:
-            logger.error(f"RAG query failed: {e}")
+            logger.error(f"Lỗi truy vấn RAG: {e}")
             return {
                 'question': question,
                 'answer': f"Xin lỗi, đã có lỗi xảy ra: {str(e)}",
@@ -148,20 +134,20 @@ TRẢ LỜI:"""
             }
     
     def get_stats(self) -> Dict:
-        """Get pipeline statistics"""
+        """Lấy thống kê của pipeline"""
         try:
-            if not self.qdrant_client:
+            if not self.vector_store.client:
                 return {
-                    'status': 'error', 
-                    'message': 'Qdrant client not connected. Check QDRANT_CLOUD_URL and QDRANT_API_KEY.'
+                    'status': 'error',
+                    'message': 'Vector Store chưa được kết nối'
                 }
             
-            collections = self.qdrant_client.get_collections().collections
+            collections = self.vector_store.client.get_collections().collections
             collection_info = None
             
             for coll in collections:
                 if coll.name == self.collection_name:
-                    collection_info = self.qdrant_client.get_collection(self.collection_name)
+                    collection_info = self.vector_store.client.get_collection(self.collection_name)
                     break
             
             if collection_info:
@@ -169,87 +155,62 @@ TRẢ LỜI:"""
                     'status': 'active',
                     'collection_name': self.collection_name,
                     'vector_count': getattr(collection_info, 'points_count', 0),
-                    'embedding_model': 'strongpear/M3-retriever-MEDICAL',
+                    'embedding_model': EMBEDDING_MODEL,
                     'llm_model': self.model_name,
-                    'connection_type': 'Qdrant Cloud'
+                    'llm_provider': 'Groq API',
+                    'vector_store': 'Qdrant Cloud'
                 }
-            else:
-                return {
-                    'status': 'collection_not_found',
-                    'message': f'Collection "{self.collection_name}" not found in Qdrant',
-                    'available_collections': [coll.name for coll in collections]
-                }
+            
+            return {
+                'status': 'collection_not_found',
+                'message': f'Không tìm thấy collection "{self.collection_name}"',
+                'available_collections': [coll.name for coll in collections]
+            }
                 
         except Exception as e:
             return {'status': 'error', 'message': str(e)}
     
-    def cleanup(self):
-        """Cleanup resources properly"""
-        try:
-            if self.qdrant_client:
-                logger.info("🧹 Cleaning up Qdrant connection...")
-                self.qdrant_client.close()
-                self.qdrant_client = None
-        except Exception as e:
-            logger.warning(f"Cleanup warning: {e}")
+    def cleanup(self) -> None:
+        """Dọn dẹp tài nguyên"""
+        if self.vector_store:
+            self.vector_store.cleanup()
     
     def __del__(self):
-        """Destructor to ensure cleanup"""
+        """Hủy đối tượng"""
         self.cleanup()
 
-# Convenience function
-def create_rag_pipeline(collection_name="medical_data", model_name=None) -> MedicalRAGPipeline:
-    """Create and return RAG pipeline instance with singleton pattern"""
+# Singleton pattern
+_global_pipeline = None
+
+def create_pipeline(
+    collection_name: str = DEFAULT_COLLECTION,
+    model_name: Optional[str] = None
+) -> MedicalRAGPipeline:
+    """Tạo và trả về instance của RAG pipeline với singleton pattern"""
     global _global_pipeline
     
-    # Check if we can reuse existing pipeline
+    # Kiểm tra có thể tái sử dụng pipeline hiện tại
     if _global_pipeline is not None:
         try:
-            # Test if existing pipeline is still working
             stats = _global_pipeline.get_stats()
             if stats['status'] == 'active':
-                # Just change model if needed
                 if model_name and model_name != _global_pipeline.model_name:
-                    _global_pipeline.change_model(model_name)
-                logger.info("♻️ Reusing existing RAG pipeline")
+                    _global_pipeline = MedicalRAGPipeline(
+                        collection_name=collection_name,
+                        model_name=model_name
+                    )
+                logger.info("♻️ Tái sử dụng RAG pipeline")
                 return _global_pipeline
-            else:
-                # Cleanup broken pipeline
-                _global_pipeline.cleanup()
-                _global_pipeline = None
+            
+            _global_pipeline.cleanup()
+            _global_pipeline = None
         except:
             _global_pipeline = None
     
-    # Create new pipeline
-    logger.info("🆕 Creating new RAG pipeline")
-    _global_pipeline = MedicalRAGPipeline(collection_name=collection_name, model_name=model_name)
-    return _global_pipeline
-
-if __name__ == "__main__":
-    # Test the pipeline
-    pipeline = create_rag_pipeline()
-    
-    # Test query
-    test_question = "căng cơ đùi là gì"
-    result = pipeline.query(test_question)
-    
-    print("=== TEST RAG PIPELINE ===")
-    print(f"Câu hỏi: {result['question']}")
-    print(f"Trả lời: {result['answer']}")
-    print(f"Số tài liệu tìm thấy: {len(result['sources'])}")
-    print(f"Có sử dụng context: {result['context_used']}")
-    
-    # Show detailed sources
-    if result['sources']:
-        print("\n=== SOURCES DETAILS ===")
-        for i, source in enumerate(result['sources'], 1):
-            metadata = source.get('metadata', {})
-            print(f"\nSource {i}:")
-            print(f"  Score: {source.get('score', 'N/A')}")
-            print(f"  Title: {metadata.get('title', 'N/A')}")
-            print(f"  URL: {metadata.get('url', 'N/A')}")
-            print(f"  Content: {source.get('content', '')[:100]}...")
-    
-    # Show stats
-    stats = pipeline.get_stats()
-    print(f"\nThống kê: {stats}") 
+    # Tạo pipeline mới
+    logger.info("🆕 Tạo RAG pipeline mới")
+    _global_pipeline = MedicalRAGPipeline(
+        collection_name=collection_name,
+        model_name=model_name
+    )
+    return _global_pipeline 

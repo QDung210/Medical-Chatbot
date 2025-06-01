@@ -5,13 +5,14 @@ import atexit
 from dotenv import load_dotenv
 import requests
 
-# Add the RAG pipeline to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'rag_pipeline', 'src'))
+# Thêm đường dẫn tới thư mục gốc của project
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(project_root)
 
-from rag_pipeline import create_rag_pipeline
+from rag_pipeline.src import create_pipeline, DEFAULT_MODEL, DEFAULT_COLLECTION
 
 # Đường dẫn tuyệt đối tới file .env trong rag_pipeline
-abs_env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'rag_pipeline', '.env'))
+abs_env_path = os.path.join(project_root, 'rag_pipeline', '.env')
 if os.path.exists(abs_env_path):
     load_dotenv(abs_env_path)
 
@@ -83,7 +84,7 @@ if 'rag_pipeline' not in st.session_state:
     with st.spinner('🔄 Đang khởi tạo hệ thống AI...'):
         try:
             # Create pipeline with Qdrant Cloud
-            st.session_state.rag_pipeline = create_rag_pipeline(
+            st.session_state.rag_pipeline = create_pipeline(
                 collection_name='medical_data',
                 model_name=st.session_state.selected_model
             )
@@ -133,7 +134,7 @@ with st.sidebar:
                         st.error('❌ Không thể chuyển model!')
                 else:
                     # Create new pipeline with new model
-                    st.session_state.rag_pipeline = create_rag_pipeline(
+                    st.session_state.rag_pipeline = create_pipeline(
                         collection_name='medical_data',
                         model_name=new_model
                     )

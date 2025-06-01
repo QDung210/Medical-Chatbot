@@ -1,69 +1,78 @@
-import os
 import logging
+from typing import List, Dict, Optional, Callable
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
+from .config import QDRANT_CLOUD_URL, QDRANT_API_KEY
 
 logger = logging.getLogger(__name__)
 
-def connect_to_qdrant():
-    """Connect to Qdrant Cloud if env vars are set, else báo lỗi."""
-    cloud_url = os.getenv('QDRANT_CLOUD_URL')
-    api_key = os.getenv('QDRANT_API_KEY')
-    if cloud_url and api_key:
-        try:
-            logger.info(f"🌐 Connecting to Qdrant Cloud: {cloud_url}")
-            client = QdrantClient(url=cloud_url, api_key=api_key, timeout=30, prefer_grpc=False)
-            # Test connection
-            collections = client.get_collections()
-            logger.info(f"✅ Connected to Qdrant Cloud successfully! Collections: {[c.name for c in collections.collections]}")
-            return client
-        except Exception as e:
-            logger.error(f"❌ Failed to connect to Qdrant Cloud: {e}")
-            return None
-    else:
-        logger.error("❌ Qdrant Cloud credentials not found in environment variables.")
-        return None
+class VectorStore:
+    def __init__(self):
+        """Khởi tạo Vector Store"""
+        self.client = None
+        self._connect()
 
-def get_qdrant_retriever(client, collection_name="medical_data", embedding_model=None, top_k=5):
-    """Create Qdrant retriever for similarity search"""
-    if not client:
-        logger.error("No Qdrant client provided")
-        return None
-    
-    if not embedding_model:
-        # Import here to avoid circular import
+    def _connect(self) -> None:
+        """Kết nối tới Qdrant Cloud"""
+        if not (QDRANT_CLOUD_URL and QDRANT_API_KEY):
+            logger.error("Thiếu thông tin xác thực Qdrant Cloud")
+            return
+
         try:
-            from model_setup import load_embedding_model
-            embedding_model = load_embedding_model()
-        except ImportError:
-            logger.error("Cannot import load_embedding_model")
-            return None
-    
-    def retrieve(query, limit=top_k):
-        try:
-            query_vector = embedding_model.encode(query).tolist()
-            
-            # Use the newer query_points method instead of deprecated search
-            search_results = client.query_points(
-                collection_name=collection_name,
-                query=query_vector,
-                limit=limit,
-                with_payload=True
+            self.client = QdrantClient(
+                url=QDRANT_CLOUD_URL,
+                api_key=QDRANT_API_KEY,
+                timeout=30,
+                prefer_grpc=False
             )
-            
-            documents = []
-            for result in search_results.points:
-                doc = {
+            collections = self.client.get_collections()
+            logger.info(f"Đã kết nối thành công tới Qdrant Cloud! Collections: {[c.name for c in collections.collections]}")
+        except Exception as e:
+            logger.error(f"Không thể kết nối tới Qdrant Cloud: {e}")
+            self.client = None
+
+    def create_retriever(
+        self,
+        collection_name: str,
+        embedding_model: SentenceTransformer,
+        top_k: int = 5
+    ) -> Optional[Callable]:
+        """Tạo hàm truy xuất dữ liệu dựa trên độ tương đồng"""
+        if not self.client:
+            logger.error("Chưa kết nối tới Qdrant")
+            return None
+
+        def retrieve(query: str, limit: int = top_k) -> List[Dict]:
+            try:
+                query_vector = embedding_model.encode(query).tolist()
+                search_results = self.client.query_points(
+                    collection_name=collection_name,
+                    query=query_vector,
+                    limit=limit,
+                    with_payload=True
+                )
+                
+                return [{
                     'content': result.payload.get('content', ''),
                     'metadata': result.payload.get('metadata', {}),
                     'score': result.score
-                }
-                documents.append(doc)
-            
-            return documents
-            
-        except Exception as e:
-            logger.error(f"Search failed: {e}")
-            return []
-    
-    return retrieve 
+                } for result in search_results.points]
+                
+            except Exception as e:
+                logger.error(f"Lỗi tìm kiếm: {e}")
+                return []
+        
+        return retrieve
+
+    def cleanup(self) -> None:
+        """Dọn dẹp kết nối"""
+        if self.client:
+            try:
+                self.client.close()
+                self.client = None
+            except Exception as e:
+                logger.warning(f"Lỗi khi đóng kết nối: {e}")
+
+    def __del__(self):
+        """Hủy đối tượng"""
+        self.cleanup() 
