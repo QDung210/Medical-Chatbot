@@ -183,6 +183,27 @@ TRẢ LỜI:"""
         if self.vector_store:
             self.vector_store.cleanup()
     
+    def change_model(self, new_model_name: str) -> bool:
+        """Thay đổi model LLM"""
+        try:
+            # Lưu tên model mới
+            self.model_name = new_model_name
+            
+            # Tải model mới
+            llm_config = ModelManager.load_llm_model(model_name=new_model_name)
+            if llm_config['type'] != 'groq':
+                raise Exception(f"Lỗi tải LLM: {llm_config.get('message', 'Lỗi không xác định')}")
+            
+            # Cập nhật pipeline
+            self.llm_pipeline = ModelManager.create_llm_pipeline(llm_config)
+            
+            logger.info(f"✅ Đã chuyển sang model {new_model_name} thành công!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Lỗi chuyển model: {e}")
+            raise Exception(f"Lỗi chuyển model: {e}")
+    
     def __del__(self):
         """Hủy đối tượng"""
         self.cleanup()

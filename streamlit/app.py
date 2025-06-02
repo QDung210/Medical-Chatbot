@@ -125,13 +125,10 @@ with st.sidebar:
         with st.spinner(f'🔄 Đang chuyển sang {new_model}...'):
             try:
                 if st.session_state.rag_pipeline:
-                    success = st.session_state.rag_pipeline.change_model(new_model)
-                    if success:
-                        st.session_state.selected_model = new_model
-                        st.success(f'✅ Đã chuyển sang {new_model}!')
-                        st.rerun()
-                    else:
-                        st.error('❌ Không thể chuyển model!')
+                    st.session_state.rag_pipeline.change_model(new_model)
+                    st.session_state.selected_model = new_model
+                    st.success(f'✅ Đã chuyển sang {new_model}!')
+                    st.rerun()
                 else:
                     # Create new pipeline with new model
                     st.session_state.rag_pipeline = create_pipeline(
