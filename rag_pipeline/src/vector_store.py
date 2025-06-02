@@ -1,8 +1,16 @@
 import logging
+import os
 from typing import List, Dict, Optional, Callable
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
-from .config import QDRANT_CLOUD_URL, QDRANT_API_KEY
+from dotenv import load_dotenv
+
+# Load environment variables
+env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+load_dotenv(env_path)
+
+QDRANT_CLOUD_URL = os.getenv('QDRANT_CLOUD_URL')
+QDRANT_API_KEY = os.getenv('QDRANT_API_KEY')
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +34,7 @@ class VectorStore:
                 prefer_grpc=False
             )
             collections = self.client.get_collections()
-            logger.info(f"Đã kết nối thành công tới Qdrant Cloud! Collections: {[c.name for c in collections.collections]}")
+            logger.info(f"Đã kết nối Qdrant Cloud! Collections: {[c.name for c in collections.collections]}")
         except Exception as e:
             logger.error(f"Không thể kết nối tới Qdrant Cloud: {e}")
             self.client = None

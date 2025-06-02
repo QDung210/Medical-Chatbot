@@ -1,40 +1,41 @@
 import logging
+import os
 from typing import Dict, List, Optional
-import requests
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Add the project root to Python path
 project_root = str(Path(__file__).parent.parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+# Load environment variables
+env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+load_dotenv(env_path)
+
+# Configuration constants
+DEFAULT_MODEL = 'llama-3.3-70b-versatile'
+DEFAULT_COLLECTION = 'medical_data'
+DEFAULT_TOP_K = 10
+DEFAULT_MAX_TOKENS = 1024
+EMBEDDING_MODEL = 'strongpear/M3-retriever-MEDICAL'
+
 from .model_setup import ModelManager
 from .vector_store import VectorStore
-from .config import (
-    DEFAULT_COLLECTION, DEFAULT_MODEL, DEFAULT_TOP_K,
-    DEFAULT_MAX_TOKENS, EMBEDDING_MODEL
-)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class MedicalRAGPipeline:
-    def __init__(
-        self,
-        collection_name: str = DEFAULT_COLLECTION,
-        model_name: str = DEFAULT_MODEL
-    ):
+    def __init__(self, collection_name: str = DEFAULT_COLLECTION, model_name: str = DEFAULT_MODEL):
         """Khởi tạo Medical RAG Pipeline"""
         self.collection_name = collection_name
         self.model_name = model_name
-        
-        # Khởi tạo các thành phần
         self.embedding_model = None
         self.vector_store = None
         self.retriever = None
         self.llm_pipeline = None
-        
         self._setup_pipeline()
     
     def _setup_pipeline(self) -> None:
@@ -61,8 +62,7 @@ class MedicalRAGPipeline:
                 raise Exception(f"Lỗi tải LLM: {llm_config.get('message', 'Lỗi không xác định')}")
             
             self.llm_pipeline = ModelManager.create_llm_pipeline(llm_config)
-            
-            logger.info("✅ Đã thiết lập RAG Pipeline thành công!")
+            logger.info("✅ RAG Pipeline thiết lập thành công!")
             
         except Exception as e:
             logger.error(f"Lỗi thiết lập pipeline: {e}")
@@ -102,27 +102,53 @@ HƯỚNG DẪN:
 
 TRẢ LỜI:"""
     
-    def query(
-        self,
-        question: str,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-        stream: bool = False
-    ) -> Dict:
+    def query(self, question: str, max_tokens: int = DEFAULT_MAX_TOKENS, stream: bool = False) -> Dict:
         """Hàm chính để truy vấn RAG"""
         try:
             # 1. Tìm kiếm tài liệu
             documents = self._search_documents(question)
             
-            # 2. Tạo prompt với context
-            prompt = self._generate_context_prompt(question, documents)
+            # 2. Deduplicate sources by title
+            unique_docs = {}
+            for doc in documents:
+                metadata = doc.get('metadata', {})
+                title = metadata.get('title', metadata.get('name', ''))
+                url = metadata.get('url', metadata.get('source', ''))
+                
+                # Tạo key để deduplicate
+                if title.strip():
+                    key = title.strip().lower()
+                elif url.strip():
+                    key = url.strip()
+                else:
+                    # Fallback nếu không có title hay url
+                    key = f"doc_{len(unique_docs)}"
+                
+                # Chỉ giữ lại document có score cao nhất cho mỗi key
+                if key not in unique_docs or doc.get('score', 0) > unique_docs[key].get('score', 0):
+                    unique_docs[key] = doc
             
-            # 3. Sinh câu trả lời
+            # Filter docs theo threshold
+            high_quality_docs = [doc for doc in unique_docs.values() if doc.get('score', 0) >= 0.6]
+            
+            if high_quality_docs:
+                # Nếu có docs chất lượng cao (>= 0.6), chỉ hiển thị những docs này
+                deduplicated_docs = sorted(high_quality_docs, key=lambda x: x.get('score', 0), reverse=True)[:10]
+            else:
+                # Nếu không có docs >= 0.6, hiển thị tất cả và filter frontend sẽ handle
+                all_docs = list(unique_docs.values())
+                deduplicated_docs = sorted(all_docs, key=lambda x: x.get('score', 0), reverse=True)[:10]
+            
+            # Tạo prompt với context
+            prompt = self._generate_context_prompt(question, deduplicated_docs)
+            
+            # Sinh câu trả lời
             response = self.llm_pipeline(prompt, max_tokens=max_tokens, stream=stream)
             
             result = {
                 'question': question,
-                'sources': documents,
-                'context_used': len(documents) > 0
+                'sources': deduplicated_docs,
+                'context_used': len(deduplicated_docs) > 0
             }
             
             if stream:
@@ -145,10 +171,7 @@ TRẢ LỜI:"""
         """Lấy thống kê của pipeline"""
         try:
             if not self.vector_store.client:
-                return {
-                    'status': 'error',
-                    'message': 'Vector Store chưa được kết nối'
-                }
+                return {'status': 'error', 'message': 'Vector Store chưa được kết nối'}
             
             collections = self.vector_store.client.get_collections().collections
             collection_info = None
@@ -186,60 +209,36 @@ TRẢ LỜI:"""
     def change_model(self, new_model_name: str) -> bool:
         """Thay đổi model LLM"""
         try:
-            # Lưu tên model mới
             self.model_name = new_model_name
-            
-            # Tải model mới
             llm_config = ModelManager.load_llm_model(model_name=new_model_name)
             if llm_config['type'] != 'groq':
                 raise Exception(f"Lỗi tải LLM: {llm_config.get('message', 'Lỗi không xác định')}")
             
-            # Cập nhật pipeline
             self.llm_pipeline = ModelManager.create_llm_pipeline(llm_config)
-            
-            logger.info(f"✅ Đã chuyển sang model {new_model_name} thành công!")
+            logger.info(f"✅ Đã chuyển sang model {new_model_name}")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Lỗi chuyển model: {e}")
-            raise Exception(f"Lỗi chuyển model: {e}")
+            logger.error(f"Lỗi chuyển model: {e}")
+            return False
     
     def __del__(self):
-        """Hủy đối tượng"""
-        self.cleanup()
-
-# Singleton pattern
-_global_pipeline = None
-
-def create_pipeline(
-    collection_name: str = DEFAULT_COLLECTION,
-    model_name: Optional[str] = None
-) -> MedicalRAGPipeline:
-    """Tạo và trả về instance của RAG pipeline với singleton pattern"""
-    global _global_pipeline
-    
-    # Kiểm tra có thể tái sử dụng pipeline hiện tại
-    if _global_pipeline is not None:
+        """Destructor để dọn dẹp tài nguyên"""
         try:
-            stats = _global_pipeline.get_stats()
-            if stats['status'] == 'active':
-                if model_name and model_name != _global_pipeline.model_name:
-                    _global_pipeline = MedicalRAGPipeline(
-                        collection_name=collection_name,
-                        model_name=model_name
-                    )
-                logger.info("♻️ Tái sử dụng RAG pipeline")
-                return _global_pipeline
-            
-            _global_pipeline.cleanup()
-            _global_pipeline = None
+            self.cleanup()
         except:
-            _global_pipeline = None
+            pass
+
+def create_pipeline(collection_name: str = DEFAULT_COLLECTION, model_name: Optional[str] = None) -> MedicalRAGPipeline:
+    """Factory function để tạo RAG pipeline"""
+    if model_name is None:
+        model_name = DEFAULT_MODEL
     
-    # Tạo pipeline mới
-    logger.info("🆕 Tạo RAG pipeline mới")
-    _global_pipeline = MedicalRAGPipeline(
-        collection_name=collection_name,
-        model_name=model_name
-    )
-    return _global_pipeline 
+    try:
+        return MedicalRAGPipeline(
+            collection_name=collection_name,
+            model_name=model_name
+        )
+    except Exception as e:
+        logger.error(f"Lỗi tạo pipeline: {e}")
+        raise 
