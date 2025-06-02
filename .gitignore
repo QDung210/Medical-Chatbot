@@ -2,4 +2,5 @@
 .cache/
 __pycache__/
 .conda/
-anaconda-navigator/ 
+anaconda-navigator/ *.pyc
+__pycache__/
