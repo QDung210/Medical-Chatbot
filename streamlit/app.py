@@ -17,17 +17,13 @@ def find_api_port():
 API_PORT = find_api_port()
 API_BASE_URL = f"http://127.0.0.1:{API_PORT}"
 
-st.set_page_config(page_title="🏥 Trợ lý Y tế AI", page_icon="🏥", layout="wide")
+st.set_page_config(page_title="Trợ lý Y tế", page_icon="💬", layout="wide")
 
 st.markdown("""
 <style>
-.main-header { font-size: 2.5rem; color: #1f77b4; text-align: center; margin-bottom: 2rem; }
 .chat-message { padding: 1rem; border-radius: 0.5rem; margin: 1rem 0; }
 .user-message { background-color: #f0f2f6; border-left: 4px solid #1f77b4; }
 .bot-message { background-color: #e8f4fd; border-left: 4px solid #28a745; }
-.api-status { padding: 0.5rem; border-radius: 0.3rem; margin: 0.5rem 0; }
-.status-connected { background-color: #d4edda; color: #155724; }
-.status-disconnected { background-color: #f8d7da; color: #721c24; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -42,7 +38,7 @@ def api_call(endpoint, method="GET", data=None):
         return {"status": "error", "message": str(e)}
 
 def display_sources(sources):
-    # Chỉ hiển thị sources có điểm >= 0.7
+    # Chỉ hiển thị sources có điểm >= 0.6
     high_quality_sources = [s for s in sources if s.get('score', 0) >= 0.6]
     
     if not high_quality_sources:
@@ -68,78 +64,40 @@ if 'messages' not in st.session_state:
 if 'selected_model' not in st.session_state:
     st.session_state.selected_model = 'llama-3.3-70b-versatile'
 
-st.markdown('<h1 class="main-header">🏥 Trợ lý Y tế AI</h1>', unsafe_allow_html=True)
-
-# API status
-api_connection = api_call("/health")
-status_class = "status-connected" if api_connection["status"] == "success" else "status-disconnected"
-status_text = "✅ API kết nối thành công" if api_connection["status"] == "success" else f"❌ {api_connection.get('message', 'Lỗi API')}<br>Chạy: <code>python -m rag_pipeline.src.main</code>"
-st.markdown(f'<div class="api-status {status_class}">{status_text}</div>', unsafe_allow_html=True)
-
 # Sidebar
 with st.sidebar:
-    st.header("ℹ️ Thông tin hệ thống")
+    st.header("⚙️ Cài đặt")
     
-    if api_connection["status"] == "success":
-        st.subheader("🤖 Chọn AI Model")
-        models_data = api_call("/models")
+    # Model selection
+    models_data = api_call("/models")
+    if models_data["status"] == "success":
+        available_models = models_data["data"]["available_models"]
+        model_desc = {'llama-3.3-70b-versatile': '🦙 LLaMA 3.3 70B (Tốt nhất)', 'llama-3.1-8b-instant': '⚡ LLaMA 3.1 8B (Nhanh)'}
         
-        if models_data["status"] == "success":
-            available_models = models_data["data"]["available_models"]
-            model_desc = {'llama-3.3-70b-versatile': '🦙 LLaMA 3.3 70B (Tốt nhất)', 'llama-3.1-8b-instant': '⚡ LLaMA 3.1 8B (Nhanh)'}
-            
-            new_model = st.selectbox("Chọn model:", available_models, 
-                index=available_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_models else 0,
-                format_func=lambda x: model_desc.get(x, x))
-            
-            if new_model != st.session_state.selected_model:
-                with st.spinner(f'🔄 Đang chuyển sang {new_model}...'):
-                    result = api_call("/change-model", "POST", {"model_name": new_model})
-                    if result["status"] == "success":
-                        st.session_state.selected_model = new_model
-                        st.success(f'✅ Đã chuyển sang {new_model}!')
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(f'❌ Lỗi: {result["message"]}')
+        new_model = st.selectbox("Chọn model:", available_models, 
+            index=available_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_models else 0,
+            format_func=lambda x: model_desc.get(x, x))
+        
+        if new_model != st.session_state.selected_model:
+            with st.spinner(f'🔄 Đang chuyển sang {new_model}...'):
+                result = api_call("/change-model", "POST", {"model_name": new_model})
+                if result["status"] == "success":
+                    st.session_state.selected_model = new_model
+                    st.success(f'✅ Đã chuyển sang {new_model}!')
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f'❌ Lỗi: {result["message"]}')
     
-    st.markdown("---")
-    
-    if api_connection["status"] == "success":
-        stats_data = api_call("/stats")
-        if stats_data["status"] == "success":
-            stats = stats_data["data"]
-            if stats.get('status') == 'active':
-                st.success("🟢 Đang hoạt động")
-                st.metric("☁️ Vector Store", stats.get('vector_store', 'Unknown'))
-                st.metric("📊 Tài liệu y tế", f"{stats.get('vector_count', 0):,}")
-                st.metric("🤖 AI Model", stats.get('llm_model', 'Unknown'))
-                embedding = stats.get('embedding_model', '').split('/')[-1] if stats.get('embedding_model') else 'Unknown'
-                st.metric("🔍 Embedding", embedding)
-            else:
-                st.error(f"🔴 Lỗi: {stats.get('message', 'Unknown error')}")
-    else:
-        st.error("🔴 Chưa kết nối API")
-    
-    st.markdown("""
-    ---
-    ### 📋 Hướng dẫn
-    1. Khởi động API: `python -m rag_pipeline.src.main`
-    2. Đặt câu hỏi về sức khỏe
-    3. Nhận tư vấn từ AI
-    
-    ### ⚠️ Lưu ý
-    - Chỉ mang tính tham khảo
-    - Tham khảo bác sĩ cho vấn đề nghiêm trọng
-    """)
-    
+    # Clear chat history
     if st.button("🗑️ Xóa lịch sử"):
         st.session_state.messages = []
         st.rerun()
 
-# Chat
-st.markdown("### 💬 Trò chuyện với trợ lý y tế")
+# Main chat interface
+st.title("💬 Trò chuyện với trợ lý y tế")
 
+# Display chat messages
 for message in st.session_state.messages:
     role_class = "user-message" if message["role"] == "user" else "bot-message"
     role_icon = "👤 Bạn" if message["role"] == "user" else "🤖 Trợ lý Y tế"
@@ -147,16 +105,13 @@ for message in st.session_state.messages:
     if message["role"] == "assistant" and "sources" in message:
         display_sources(message["sources"])
 
+# Chat input
 if prompt := st.chat_input("Đặt câu hỏi về sức khỏe..."):
-    if api_connection["status"] != "success":
-        st.error("❌ Vui lòng khởi động API trước!")
-        st.stop()
-    
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.markdown(f'<div class="chat-message user-message"><strong>👤 Bạn:</strong><br>{prompt}</div>', unsafe_allow_html=True)
     
     with st.spinner('🔍 Đang tìm kiếm thông tin...'):
-        result = api_call("/query", "POST", {"question": prompt, "max_tokens": 1024})
+        result = api_call("/query", "POST", {"question": prompt})
         
         if result["status"] == "success":
             data = result["data"]
@@ -167,12 +122,4 @@ if prompt := st.chat_input("Đặt câu hỏi về sức khỏe..."):
             st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
             display_sources(sources)
         else:
-            st.error(f"❌ Lỗi: {result['message']}")
-
-st.markdown("""
----
-<div style="text-align: center; color: #666; font-size: 0.9rem;">
-    🏥 Trợ lý Y tế AI | Made with ❤️ for Healthcare<br>
-    <small>Frontend: Streamlit | Backend: FastAPI + RAG</small>
-</div>
-""", unsafe_allow_html=True) 
+            st.error(f"❌ Lỗi: {result['message']}") 
