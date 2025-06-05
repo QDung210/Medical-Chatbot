@@ -1,0 +1,6 @@
+.env
+.cache/
+__pycache__/
+.conda/
+anaconda-navigator/ *.pyc
+__pycache__/
