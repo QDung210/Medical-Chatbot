@@ -45,6 +45,8 @@ async def chat_endpoint(request: ChatRequest):
     
     try:
         logger.info(f"Processing chat request for session: {request.session_id}")
+        logger.info(f"Message: {request.message[:50]}...")  # Log first 50 chars
+        
         def generate():
             for chunk in generate_answer_stream(
                 request.message, 
