@@ -1,126 +1,161 @@
-import logging
-import os
-from typing import Dict, List, Optional
-import sys
-from pathlib import Path
-from dotenv import load_dotenv
+from langchain.prompts import PromptTemplate
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.runnables import RunnableLambda
+from .utils import logger, COLLECTION, resources
+from .database.postgres_memory import get_by_session_id
 
-# Add the project root to Python path
-project_root = str(Path(__file__).parent.parent.parent)
-if project_root not in sys.path:
-    sys.path.append(project_root)
+prompt = PromptTemplate(
+    input_variables=["context", "question", "chat_history"],
+    template=(
+        "Bạn là một trợ lý AI chuyên ngành y tế. Trả lời câu hỏi sau bằng tiếng Việt một cách đầy đủ và chi tiết.\n"
+        "Nếu được thì hãy đưa ra nguyên nhân, triệu chứng, cách điều trị và các thông tin liên quan khác.\n"
+        "Nếu không phải câu hỏi về y tế, hãy nói rằng bạn không thể giúp.\n"
+        "Sau khi trả lời xong, hãy khuyên người hỏi nên tham khảo ý kiến bác sĩ.\n\n"
+        "QUAN TRỌNG: \n"
+        "- Hãy chú ý đến lịch sử cuộc trò chuyện để hiểu ngữ cảnh.\n"
+        "- Nếu câu hỏi hiện tại liên quan đến chủ đề đã thảo luận trước đó, hãy BỔ SUNG THÊM thông tin mới.\n"
+        "- ĐỪNG lặp lại những gì đã trả lời trong lịch sử cuộc trò chuyện.\n"
+        "- Chỉ cung cấp thông tin mới, bổ sung để hoàn thiện câu trả lời.\n"
+        "- ĐỪNG giải thích bạn hiểu gì về câu hỏi. Chỉ trả lời trực tiếp.\n\n"
+        "Lịch sử cuộc trò chuyện:\n{chat_history}\n\n"
+        "Ngữ cảnh từ tài liệu y tế:\n{context}\n\n"
+        "Câu hỏi: {question}\n\n"
+        "Trả lời:"
+    )
+)
 
-# Load environment variables
-env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
-load_dotenv(env_path)
-
-# Configuration constants
-DEFAULT_MODEL = 'llama-3.3-70b-versatile'
-DEFAULT_COLLECTION = 'medical_data'
-DEFAULT_TOP_K = 10
-DEFAULT_MAX_TOKENS =512
-EMBEDDING_MODEL = 'strongpear/M3-retriever-MEDICAL'
-
-from .model_setup import ModelManager
-from .vector_store import VectorStore
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-class MedicalRAGPipeline:
-    def __init__(self, collection_name: str = DEFAULT_COLLECTION, model_name: str = DEFAULT_MODEL):
-        """Initialize RAG pipeline with basic setup"""
-        self.collection_name = collection_name
-        self.model_name = model_name
+def retrieve_context(question: str, top_k=3) -> dict:
+    vec = resources.embedder.encode(question).tolist()
+    results = resources.client.query_points(
+        collection_name=COLLECTION,
+        query=vec,
+        limit=top_k,
+        with_payload=True
+    )
+    contexts = []
+    sources = []
+    seen_titles = set()
+    for i, pt in enumerate(results.points):
+        title = pt.payload.get('metadata', {}).get('title', '') if pt.payload else ''
+        if title in seen_titles:
+            continue
+        seen_titles.add(title)
+        url = pt.payload.get('metadata', {}).get('url', '') if pt.payload else ''
+        content = pt.payload.get('page_content', '') if pt.payload else ''
         
-        # Setup components
-        self.embedding_model = ModelManager.load_embedding_model()
-        self.vector_store = VectorStore()
-        self.retriever = self.vector_store.create_retriever(
-            collection_name=self.collection_name,
-            embedding_model=self.embedding_model,
-            top_k=DEFAULT_TOP_K
+        if content:
+            contexts.append(content)
+            sources.append({
+                'title': title,
+                'url': url,
+                'score': pt.score
+            })
+    return {
+        'context': "\n---\n".join(contexts),
+        'sources': sources
+    }
+
+def create_rag_chain_with_memory(model):
+    def rag_logic(inputs):
+        question = inputs["question"]
+        chat_history = inputs.get("chat_history", [])
+        
+        logger.info(f"Original question: {question}")
+        logger.info(f"Chat history length: {len(chat_history)}")
+        
+        # Format chat history for context 
+        history_text = ""
+        
+        if chat_history:
+            recent_history = chat_history[-4:]  
+            history_lines = []
+            
+            for msg in recent_history:
+                if hasattr(msg, 'content'):
+                    content = msg.content
+                    if len(content) > 300:
+                        content = content[:300] + "..."
+                    
+                    if msg.__class__.__name__ == 'HumanMessage':
+                        history_lines.append(f"Người dùng: {content}")
+                    elif msg.__class__.__name__ == 'AIMessage':
+                        history_lines.append(f"AI: {content}")
+            
+            history_text = "\n".join(history_lines)
+            
+            # Check for follow-up questions and modify the question
+            followup_words = ['còn', 'nào', 'thêm', 'khác', 'nữa']
+            has_followup = any(word in question.lower() for word in followup_words)
+            
+            logger.info(f"Has followup words: {has_followup}")
+            
+            if has_followup and len(recent_history) >= 2:
+                # Get the last user question
+                for msg in reversed(recent_history):
+                    if msg.__class__.__name__ == 'HumanMessage':
+                        last_question = msg.content
+                        original_question = question
+                        question = f"{last_question} {question}".strip()
+                        logger.info(f"Follow-up detected!")
+                        logger.info(f"  - Last question: {last_question}")
+                        logger.info(f"  - Current question: {original_question}")
+                        logger.info(f"  - Modified question: {question}")
+                        break
+        
+        if not history_text:
+            history_text = "Chưa có lịch sử cuộc trò chuyện."
+        
+        retrieval_result = retrieve_context(question)
+        
+        formatted_prompt = prompt.format(
+            context=retrieval_result['context'], 
+            question=question, 
+            chat_history=history_text
         )
-        self.llm_pipeline = ModelManager.create_llm_pipeline(
-            ModelManager.load_llm_model(model_name=self.model_name)
-        )
-
-    def _deduplicate_docs(self, documents: List[Dict]) -> List[Dict]:
-        """Simple deduplication based on title or URL"""
-        unique_docs = {}
-        for doc in documents:
-            metadata = doc.get('metadata', {})
-            key = metadata.get('title', metadata.get('url', f"doc_{len(unique_docs)}"))
-            if key not in unique_docs or doc.get('score', 0) > unique_docs[key].get('score', 0):
-                unique_docs[key] = doc
-        return list(unique_docs.values())
-
-    def _filter_docs(self, documents: List[Dict], threshold: float = 0.44) -> List[Dict]:
-        """Filter documents by similarity score"""
-        return [doc for doc in documents if doc.get('score', 0) >= threshold]
-
-    def _create_prompt(self, question: str, documents: List[Dict]) -> str:
-        """Create a detailed prompt with context"""
-        # Base prompt template
-        base_prompt = """Bạn là một trợ lý y tế thông minh, thân thiện và đáng tin cậy. Nhiệm vụ của bạn là giúp người dùng hiểu rõ về các vấn đề sức khỏe một cách dễ hiểu, đầy đủ và chính xác.
-
-Hãy thực hiện các yêu cầu sau:
-1. Trả lời câu hỏi một cách chi tiết, dễ hiểu với người không có chuyên môn y tế
-2. Nếu có nhiều khả năng xảy ra, hãy nêu từng khả năng cùng giải thích và khuyến nghị tương ứng
-3. Cung cấp thông tin về:
-   - Định nghĩa/giải thích rõ ràng
-   - Các triệu chứng/biểu hiện (nếu có), không có thì thôi, bỏ qua cái này.
-   - Nguyên nhân (nếu có), không có thì thôi, bỏ qua cái này.
-   - Cách điều trị/phòng ngừa (nếu có), không có thì thôi, bỏ qua cái này.
-   - Khi nào cần gặp bác sĩ (nếu có), không có thì thôi, bỏ qua cái này.
-   - Lời khuyên hữu ích
-4. Kết thúc bằng lời khuyên phù hợp hoặc khuyến khích người dùng tham khảo bác sĩ nếu cần
-5. Nếu không phải là câu hỏi liên quan đến y tế thì không cần trả lời. """
-
-        # Add context if available
-        if documents:
-            context = "\n".join([f"- {doc.get('content', '')}" for doc in documents])
-            base_prompt += f"\n\nTHÔNG TIN:\n{context}"
-
-        # Add question
-        base_prompt += f"\n\nCÂU HỎI:\n{question}\n\nCâu trả lời:"
+        response = model.invoke(formatted_prompt)
         
-        return base_prompt
-
-    def query(self, question: str) -> Dict:
-        """Main query function with simplified flow"""
-        # 1. Get relevant documents
-        documents = self.retriever(question)
+        global _last_sources
+        _last_sources = retrieval_result['sources']
         
-        # 2. Deduplicate and filter documents
-        unique_docs = self._deduplicate_docs(documents)
-        filtered_docs = self._filter_docs(unique_docs)
-        
-        # 3. Create prompt and get response
-        prompt = self._create_prompt(question, filtered_docs)
-        response = self.llm_pipeline(prompt)
-        
-        return {
-            'question': question,
-            'answer': response,
-            'sources': filtered_docs
-        }
+        return response.content
 
-    def cleanup(self):
-        """Cleanup resources"""
-        if self.vector_store:
-            self.vector_store.cleanup()
-
-def create_pipeline(collection_name: str = DEFAULT_COLLECTION, model_name: Optional[str] = None) -> MedicalRAGPipeline:
-    """Factory function to create RAG pipeline"""
-    if model_name is None:
-        model_name = DEFAULT_MODEL
+    rag_runnable = RunnableLambda(rag_logic)
     
-    try:
-        return MedicalRAGPipeline(
-            collection_name=collection_name,
-            model_name=model_name
-        )
-    except Exception as e:
-        logger.error(f"Error creating pipeline: {e}")
-        raise 
+    chain_with_memory = RunnableWithMessageHistory(
+        rag_runnable,
+        get_by_session_id,
+        input_messages_key="question",
+        history_messages_key="chat_history",
+    )
+    
+    return chain_with_memory
+
+# Global variable to store sources
+_last_sources = []
+
+def generate_answer_stream(question: str, model, session_id: str = "default"):
+    """Generate streaming answer with memory"""
+    
+    chain = create_rag_chain_with_memory(model)
+    
+    result = chain.invoke(
+        {"question": question},
+        config={"configurable": {"session_id": session_id}}
+    )
+    
+
+    global _last_sources
+    sources = _last_sources
+    
+    for char in result:
+        yield {
+            'content': char,
+            'sources': sources,
+            'type': 'content'
+        }
+    yield {
+        'content': '',
+        'sources': sources,
+        'type': 'sources'
+    }
