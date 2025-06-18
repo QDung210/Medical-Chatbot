@@ -11,6 +11,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"
 
+
 class ModelState:
     def __init__(self):
         self.llm_loaded = False 
@@ -34,6 +35,16 @@ def load_llm(model_name=DEFAULT_MODEL):
 @app.on_event("startup")
 async def startup_event():
     logger.info("🚀 Starting up FastAPI server...")
+    
+    # Initialize database first
+    try:
+        from .database.postgres_memory import init_database
+        init_database()
+    except ImportError:
+        from database.postgres_memory import init_database
+        init_database()
+    
+    # Then load the model
     load_llm()
 
 @app.post("/chat")

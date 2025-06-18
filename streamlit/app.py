@@ -8,6 +8,43 @@ st.set_page_config(
     page_icon="🏥",
     layout="wide"
 )
+
+# Add custom CSS for loading spinner
+st.markdown("""
+<style>
+.loading-spinner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 16px;
+    color: #1f77b4;
+}
+
+.spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #1f77b4;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.thinking-dots {
+    animation: thinking 1.5s infinite;
+}
+
+@keyframes thinking {
+    0%, 20% { opacity: 0.2; }
+    50% { opacity: 1; }
+    100% { opacity: 0.2; }
+}
+</style>
+""", unsafe_allow_html=True)
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "session_id" not in st.session_state:
@@ -58,11 +95,21 @@ if st.session_state.is_processing:
             message_placeholder = st.empty()
             full_response = ""
             sources = []
-            message_placeholder.write("🤔 Đang suy nghĩ...")
+            
+            # Show animated thinking indicator with spinner
+            thinking_placeholder = st.empty()
             
             try:
+                # Show beautiful spinner
+                thinking_placeholder.markdown("""
+                <div class="loading-spinner">
+                    <div class="spinner"></div>
+                    <span class="thinking-dots">🤔 Đang suy nghĩ và tìm kiếm thông tin y tế...</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 response = requests.post(
-                    "http://localhost:8000/chat",
+                    "http://medical-fastapi:8000/chat",
                     json={
                         "message": last_user_message,
                         "session_id": st.session_state.session_id
@@ -72,6 +119,8 @@ if st.session_state.is_processing:
                 )
                 
                 if response.status_code == 200:
+                    # Clear thinking message and start showing response
+                    thinking_placeholder.empty()
                     for line in response.iter_lines():
                         if line:
                             line = line.decode('utf-8')

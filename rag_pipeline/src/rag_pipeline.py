@@ -137,25 +137,59 @@ _last_sources = []
 def generate_answer_stream(question: str, model, session_id: str = "default"):
     """Generate streaming answer with memory"""
     
-    chain = create_rag_chain_with_memory(model)
-    
-    result = chain.invoke(
-        {"question": question},
-        config={"configurable": {"session_id": session_id}}
-    )
-    
-
-    global _last_sources
-    sources = _last_sources
-    
-    for char in result:
+    try:
+        logger.info(f"Processing question: {question} for session: {session_id}")
+        
+        chain = create_rag_chain_with_memory(model)
+        
+        result = chain.invoke(
+            {"question": question},
+            config={"configurable": {"session_id": session_id}}
+        )
+        
+        logger.info(f"Generated response length: {len(result) if result else 0}")
+        
+        global _last_sources
+        sources = _last_sources
+        
+        # Check if result is a string
+        if isinstance(result, str):
+            # Stream character by character for better UX
+            for char in result:
+                yield {
+                    'content': char,
+                    'sources': sources,
+                    'type': 'content'
+                }
+        else:
+            # If result is not string, convert to string first
+            result_str = str(result)
+            for char in result_str:
+                yield {
+                    'content': char,
+                    'sources': sources,
+                    'type': 'content'
+                }
+        
+        # Send sources at the end
         yield {
-            'content': char,
+            'content': '',
             'sources': sources,
-            'type': 'content'
+            'type': 'sources'
         }
-    yield {
-        'content': '',
-        'sources': sources,
-        'type': 'sources'
-    }
+        
+        logger.info("Successfully completed response generation")
+        
+    except Exception as e:
+        logger.error(f"Error in generate_answer_stream: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        # Return error message
+        error_message = "❓ Chatbot không có đủ thông tin đáng tin cậy để trả lời câu hỏi này."
+        for char in error_message:
+            yield {
+                'content': char,
+                'sources': [],
+                'type': 'content'
+            }

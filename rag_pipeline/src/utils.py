@@ -58,7 +58,8 @@ class Resources:
             download_model_if_needed()
             
             # Initialize Qdrant client
-            self.client = QdrantClient(url="http://localhost:6333")
+            qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+            self.client = QdrantClient(url=qdrant_url)
             
             # Initialize embedder
             self.embedder = SentenceTransformer(str(EMBEDDINGS_MODEL))
