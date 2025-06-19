@@ -6,7 +6,7 @@ RUN pip install --user --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu \
     torch>=2.0.0+cpu
     
-COPY rag_pipeline/requirements.txt .
+COPY ./rag_pipeline/requirements.txt ./requirements.txt
 
 RUN pip install --user --no-cache-dir -r requirements.txt
 
@@ -24,7 +24,8 @@ WORKDIR /app
 
 COPY --from=builder /root/.local /root/.local
 
-COPY rag_pipeline/ ./rag_pipeline/
+COPY ./rag_pipeline/ ./rag_pipeline/
+
 COPY .env .env
 
 ENV PATH=/root/.local/bin:$PATH

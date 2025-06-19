@@ -29,8 +29,8 @@ services:
 
   fastapi:
     build:
-      context: ./rag_pipeline
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: rag_pipeline/Dockerfile
     image: medical-fastapi:latest
     container_name: medical-fastapi
     ports:
