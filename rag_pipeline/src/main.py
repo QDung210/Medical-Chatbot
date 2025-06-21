@@ -4,7 +4,8 @@ from pydantic import BaseModel
 import json
 from .rag_pipeline import generate_answer_stream
 from .model_setup import load_model
-from .utils import DEFAULT_MODEL, logger
+from .utils import DEFAULT_MODEL, logger, tracer
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 
 class ChatRequest(BaseModel):
@@ -20,17 +21,25 @@ class ModelState:
 model_state = ModelState()
 app = FastAPI()
 
+# Instrument FastAPI with OpenTelemetry
+FastAPIInstrumentor.instrument_app(app)
+
 def load_llm(model_name=DEFAULT_MODEL):
     """Load the language model"""
-    try:
-        logger.info(f"Attempting to load model: {model_name}")
-        model_state.model = load_model(model_name, streaming=True)
-        model_state.llm_loaded = True
-        logger.info(f"Model {model_name} loaded successfully")
-    except Exception as e:
-        logger.error(f"Error loading model {model_name}: {e}")
-        model_state.llm_loaded = False
-        raise HTTPException(status_code=500, detail=f"Failed to load model {model_name}")
+    with tracer.start_as_current_span("load_llm") as span:
+        span.set_attribute("model.name", model_name)
+        try:
+            logger.info(f"Attempting to load model: {model_name}")
+            model_state.model = load_model(model_name, streaming=True)
+            model_state.llm_loaded = True
+            span.set_attribute("model.loaded", True)
+            logger.info(f"Model {model_name} loaded successfully")
+        except Exception as e:
+            span.set_attribute("model.loaded", False)
+            span.record_exception(e)
+            logger.error(f"Error loading model {model_name}: {e}")
+            model_state.llm_loaded = False
+            raise HTTPException(status_code=500, detail=f"Failed to load model {model_name}")
 
 @app.on_event("startup")
 async def startup_event():

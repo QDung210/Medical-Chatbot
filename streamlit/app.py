@@ -45,15 +45,19 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+
+# Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
-if "is_processing" not in st.session_state:
-    st.session_state.is_processing = False
+if "waiting_for_response" not in st.session_state:
+    st.session_state.waiting_for_response = False
+
 st.title("🏥 Medical Chatbot")
 st.write("Trợ lý AI chuyên ngành y tế!")
 
+# Display chat history
 with st.container():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -79,11 +83,16 @@ with st.container():
             else:
                 st.write(message["content"])
 
+# Handle new user input
 if prompt := st.chat_input("Hỏi tôi về vấn đề sức khỏe..."):
+    # Add user message to history immediately
     st.session_state.messages.append({"role": "user", "content": prompt})
-    st.session_state.is_processing = True
+    st.session_state.waiting_for_response = True
     st.rerun()
-if st.session_state.is_processing:
+
+# Process AI response if waiting
+if st.session_state.waiting_for_response:
+    # Get the last user message
     last_user_message = None
     for msg in reversed(st.session_state.messages):
         if msg["role"] == "user":
@@ -92,22 +101,20 @@ if st.session_state.is_processing:
     
     if last_user_message:
         with st.chat_message("assistant"):
+            # Show thinking spinner first
+            thinking_placeholder = st.empty()
+            thinking_placeholder.markdown("""
+            <div class="loading-spinner">
+                <div class="spinner"></div>
+                <span class="thinking-dots">🤔 AI đang suy nghĩ và tìm kiếm thông tin y tế...</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
             message_placeholder = st.empty()
             full_response = ""
             sources = []
             
-            # Show animated thinking indicator with spinner
-            thinking_placeholder = st.empty()
-            
             try:
-                # Show beautiful spinner
-                thinking_placeholder.markdown("""
-                <div class="loading-spinner">
-                    <div class="spinner"></div>
-                    <span class="thinking-dots">🤔 Đang suy nghĩ và tìm kiếm thông tin y tế...</span>
-                </div>
-                """, unsafe_allow_html=True)
-                
                 response = requests.post(
                     "http://medical-fastapi:8000/chat",
                     json={
@@ -137,10 +144,11 @@ if st.session_state.is_processing:
                                         sources = chunk.get('sources', [])
                                 except json.JSONDecodeError:
                                     continue
+                    
+                    # Final response without cursor
                     message_placeholder.write(full_response)
-                    if full_response:
-                        print(f"DEBUG: Response length: {len(full_response)} characters")
-                        print(f"DEBUG: Response ends with: '{full_response[-50:]}'")
+                    
+                    # Show sources
                     if sources:
                         valid_sources = sources 
                         
@@ -160,16 +168,22 @@ if st.session_state.is_processing:
                         st.write("---")
                         st.write("❓ **Chatbot không có đủ thông tin đáng tin cậy để trả lời câu hỏi này.**")
                 else:
+                    thinking_placeholder.empty()
                     st.error(f"Lỗi API: {response.status_code}")
                     full_response = "Xin lỗi, có lỗi xảy ra khi kết nối với server."
+                    message_placeholder.write(full_response)
                     
             except Exception as e:
+                thinking_placeholder.empty()
                 st.error(f"Lỗi: {str(e)}")
                 full_response = "Xin lỗi, có lỗi xảy ra. Vui lòng thử lại."
+                message_placeholder.write(full_response)
+        
+        # Add assistant response to history
         st.session_state.messages.append({
             "role": "assistant", 
             "content": full_response,
             "sources": sources
         })
-        st.session_state.is_processing = False
+        st.session_state.waiting_for_response = False
         st.rerun()

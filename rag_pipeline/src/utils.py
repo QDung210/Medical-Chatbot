@@ -4,6 +4,29 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 
+# OpenTelemetry imports
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry import trace
+
+# Setup OpenTelemetry tracing
+trace.set_tracer_provider(
+    TracerProvider(
+        resource=Resource.create({"service.name": "rag-pipeline-service"})
+    )
+)
+
+jaeger_exporter = JaegerExporter(
+    collector_endpoint="http://jaeger:14268/api/traces"
+)
+
+span_processor = BatchSpanProcessor(jaeger_exporter)
+trace.get_tracer_provider().add_span_processor(span_processor)
+
+tracer = trace.get_tracer("rag-pipeline", "0.1.0")
+
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
