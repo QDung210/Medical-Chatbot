@@ -2,27 +2,29 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15
-    container_name: postgres_chatbot
+    image: postgres:${POSTGRES_IMAGE_TAG}
+    env_file: .env
+    container_name: ${POSTGRES_CONTAINER_NAME}
     environment:
-      - POSTGRES_DB=medical_chatbot
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=admin123
-      - TZ=Asia/Ho_Chi_Minh
-      - PGTZ=Asia/Ho_Chi_Minh
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - TZ=${TZ}
+      - PGTZ=${PGTZ}
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - medical-network
 
   qdrant:
-    image: qdrant/qdrant:latest
-    container_name: qdrant-local
+    image: qdrant/qdrant:${QDRANT_IMAGE_TAG}
+    env_file: .env
+    container_name: ${QDRANT_CONTAINER_NAME}
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "${QDRANT_PORT}:6333"
+      - "${QDRANT_GRPC_PORT}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
       - ./snapshots:/snapshots
@@ -33,19 +35,24 @@ services:
     build:
       context: .
       dockerfile: rag_pipeline/Dockerfile
-    image: medical-fastapi:latest
-    container_name: medical-fastapi
+    env_file: .env
+    image: ${FASTAPI_IMAGE_NAME}:${FASTAPI_IMAGE_TAG}
+    container_name: ${FASTAPI_CONTAINER_NAME}
     ports:
-      - "8000:8000"
+      - "${FASTAPI_PORT}:8000"
     environment:
       - PYTHONPATH=/app
-      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_URL=${QDRANT_URL}
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=medical_chatbot
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=admin123
-      - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - JAEGER_ENDPOINT=${JAEGER_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=${FASTAPI_CONTAINER_NAME}
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
     volumes:
       - ./.env:/app/.env:ro
       - ./data:/app/data:ro
@@ -57,32 +64,44 @@ services:
       - qdrant
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 30s
-      retries: 5
-      start_period: 600s
+      interval: 20s
+      timeout: 10s
+      retries: 25
+      start_period: 60s
 
   streamlit:
     build:
       context: ./streamlit
       dockerfile: Dockerfile
-    image: medical-streamlit:latest
-    container_name: medical-streamlit
+    env_file: .env
+    image: ${STREAMLIT_IMAGE_NAME}:${STREAMLIT_IMAGE_TAG}
+    container_name: ${STREAMLIT_CONTAINER_NAME}
+    ports:
+      - "${STREAMLIT_PORT}:8501"
+    expose:
+      - "${STREAMLIT_PORT}"
     environment:
-      - FASTAPI_URL=http://fastapi:8000
+      - FASTAPI_URL=http://${FASTAPI_CONTAINER_NAME}:8000
     networks:
       - medical-network
     depends_on:
       fastapi:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 25
+      start_period: 60s
   nginx:
     build:
       context: ./nginx
       dockerfile: Dockerfile
-    image: medical-nginx:latest
-    container_name: medical-nginx
+    env_file: .env
+    image: ${NGINX_IMAGE_NAME}:${NGINX_IMAGE_TAG}
+    container_name: ${NGINX_CONTAINER_NAME}
     ports:
-      - "80:80"
+      - "${NGINX_PORT}:80"
     networks:
       - medical-network
     depends_on:
@@ -90,15 +109,45 @@ services:
       - fastapi
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
-    container_name: jaeger
+    image: jaegertracing/all-in-one:${JAEGER_IMAGE_TAG}
+    env_file: .env
+    container_name: ${JAEGER_CONTAINER_NAME}
     ports:
-      - "16686:16686"  # Jaeger UI
-      - "14268:14268"  # Jaeger collector HTTP
+      - "${JAEGER_UI_PORT}:16686"
+      - "${JAEGER_COLLECTOR_PORT}:14268"
     environment:
       - COLLECTOR_OTLP_ENABLED=true
+      - USE_OPENMP=1
+      - OMP_NUM_THREADS=1
     networks:
       - medical-network
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_IMAGE_TAG}
+    env_file: .env
+    container_name: ${PROMETHEUS_CONTAINER_NAME}
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - medical-network
+    depends_on:
+      - fastapi
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_IMAGE_TAG}
+    env_file: .env
+    container_name: ${GRAFANA_CONTAINER_NAME}
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - medical-network
+    depends_on:
+      - prometheus
 
 networks:
   medical-network:
@@ -110,4 +159,6 @@ volumes:
   qdrant_data:
     driver: local
   model_cache:
-    driver: local 
+    driver: local
+  grafana-data:
+    driver: local

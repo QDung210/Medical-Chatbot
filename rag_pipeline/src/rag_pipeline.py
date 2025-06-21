@@ -2,8 +2,9 @@ from langchain.prompts import PromptTemplate
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.runnables import RunnableLambda
-from .utils import logger, COLLECTION, resources, tracer
+from .utils import logger, COLLECTION, resources, tracer, VECTOR_SEARCH_TIME, ERROR_COUNT
 from .database.postgres_memory import get_by_session_id
+import time
 
 prompt = PromptTemplate(
     input_variables=["context", "question", "chat_history"],
@@ -31,6 +32,7 @@ def retrieve_context(question: str, top_k=3) -> dict:
         span.set_attribute("top_k", top_k)
         
         # Encode question to vector
+        start_time = time.time()
         with tracer.start_as_current_span("encode_question"):
             vec = resources.embedder.encode(question).tolist()
         
@@ -43,6 +45,10 @@ def retrieve_context(question: str, top_k=3) -> dict:
                 with_payload=True
             )
             query_span.set_attribute("results.count", len(results.points))
+        
+        # Record vector search time
+        search_time = time.time() - start_time
+        VECTOR_SEARCH_TIME.observe(search_time)
         
         # Process results
         contexts = []
@@ -156,65 +162,66 @@ def generate_answer_stream(question: str, model, session_id: str = "default"):
     with tracer.start_as_current_span("generate_answer_stream") as span:
         span.set_attribute("question.length", len(question))
         span.set_attribute("session_id", session_id)
+    
+    try:
+        logger.info(f"Processing question: {question} for session: {session_id}")
         
-        try:
-            logger.info(f"Processing question: {question} for session: {session_id}")
-            
-            with tracer.start_as_current_span("create_rag_chain"):
-                chain = create_rag_chain_with_memory(model)
-            
-            with tracer.start_as_current_span("invoke_chain") as invoke_span:
-                result = chain.invoke(
-                    {"question": question},
-                    config={"configurable": {"session_id": session_id}}
-                )
-                invoke_span.set_attribute("result.length", len(result) if result else 0)
-            
-            logger.info(f"Generated response length: {len(result) if result else 0}")
-            
-            global _last_sources
-            sources = _last_sources
-            span.set_attribute("sources.count", len(sources))
-            
-            # Check if result is a string
-            if isinstance(result, str):
-                # Stream character by character for better UX
-                for char in result:
-                    yield {
-                        'content': char,
-                        'sources': sources,
-                        'type': 'content'
-                    }
-            else:
-                # If result is not string, convert to string first
-                result_str = str(result)
-                for char in result_str:
-                    yield {
-                        'content': char,
-                        'sources': sources,
-                        'type': 'content'
-                    }
-            
-            # Send sources at the end
-            yield {
-                'content': '',
-                'sources': sources,
-                'type': 'sources'
-            }
-            
-            logger.info("Successfully completed response generation")
-            
-        except Exception as e:
-            span.record_exception(e)
-            logger.error(f"Error in generate_answer_stream: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            
-            # Return error message
-            error_message = "❓ Chatbot không có đủ thông tin đáng tin cậy để trả lời câu hỏi này."
-            for char in error_message:
+        with tracer.start_as_current_span("create_rag_chain"):
+            chain = create_rag_chain_with_memory(model)
+        
+        with tracer.start_as_current_span("invoke_chain") as invoke_span:
+            result = chain.invoke(
+                {"question": question},
+                config={"configurable": {"session_id": session_id}}
+            )
+            invoke_span.set_attribute("result.length", len(result) if result else 0)
+        
+        logger.info(f"Generated response length: {len(result) if result else 0}")
+        
+        global _last_sources
+        sources = _last_sources
+        span.set_attribute("sources.count", len(sources))
+        
+        # Check if result is a string
+        if isinstance(result, str):
+            # Stream character by character for better UX
+            for char in result:
                 yield {
                     'content': char,
-                    'sources': [],
+                    'sources': sources,
                     'type': 'content'
                 }
+        else:
+            # If result is not string, convert to string first
+            result_str = str(result)
+            for char in result_str:
+                yield {
+                    'content': char,
+                    'sources': sources,
+                    'type': 'content'
+                }
+        
+        # Send sources at the end
+        yield {
+            'content': '',
+            'sources': sources,
+            'type': 'sources'
+        }
+        
+        logger.info("Successfully completed response generation")
+        
+    except Exception as e:
+        span.record_exception(e)
+        ERROR_COUNT.labels(error_type="rag_pipeline").inc()
+        logger.error(f"Error in generate_answer_stream: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        # Return error message
+        error_message = "❓ Chatbot không có đủ thông tin đáng tin cậy để trả lời câu hỏi này."
+        for char in error_message:
+            yield {
+                'content': char,
+                'sources': [],
+                'type': 'content'
+            }

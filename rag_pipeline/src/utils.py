@@ -3,29 +3,51 @@ import os
 from pathlib import Path
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
-
-# OpenTelemetry imports
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.jaeger.thrift import JaegerExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry import trace
+from prometheus_client import Counter, Histogram, Gauge
+import psutil
+import threading
+import time
 
-# Setup OpenTelemetry tracing
 trace.set_tracer_provider(
     TracerProvider(
         resource=Resource.create({"service.name": "rag-pipeline-service"})
     )
 )
-
 jaeger_exporter = JaegerExporter(
     collector_endpoint="http://jaeger:14268/api/traces"
 )
-
 span_processor = BatchSpanProcessor(jaeger_exporter)
 trace.get_tracer_provider().add_span_processor(span_processor)
 
 tracer = trace.get_tracer("rag-pipeline", "0.1.0")
+
+
+
+# Prometheus metrics definitions
+REQUEST_COUNT = Counter("chatbot_requests_total", "Total requests to chatbot")
+LATENCY = Histogram("chatbot_request_latency_seconds", "Chatbot request latency")
+MODEL_LOAD_TIME = Histogram("chatbot_model_load_time_seconds", "Time to load the LLM model")
+VECTOR_SEARCH_TIME = Histogram("chatbot_vector_search_seconds", "Vector search latency")
+MEMORY_USAGE = Gauge("chatbot_memory_usage_bytes", "Memory usage in bytes")
+ERROR_COUNT = Counter("chatbot_errors_total", "Total number of errors", ["error_type"])
+
+# Memory monitoring function
+def monitor_memory_usage():
+    """Monitor memory usage continuously"""
+    while True:
+        try:
+            process = psutil.Process()
+            memory_bytes = process.memory_info().rss
+            MEMORY_USAGE.set(memory_bytes)
+            time.sleep(10)  # Update every 10 seconds
+        except Exception as e:
+            logger.error(f"Error monitoring memory: {e}")
+            time.sleep(30)  # Wait longer if error
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)

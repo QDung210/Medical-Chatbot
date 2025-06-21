@@ -1,17 +1,21 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 import json
-from .rag_pipeline import generate_answer_stream
+import time
+import threading
+from pydantic import BaseModel
 from .model_setup import load_model
-from .utils import DEFAULT_MODEL, logger, tracer
+from fastapi import FastAPI, HTTPException
+from .rag_pipeline import generate_answer_stream
+from fastapi.responses import StreamingResponse, Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from .utils import (DEFAULT_MODEL, logger, tracer, 
+                   REQUEST_COUNT, LATENCY, MODEL_LOAD_TIME, 
+                   ERROR_COUNT, monitor_memory_usage)
 
 
 class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"
-
 
 class ModelState:
     def __init__(self):
@@ -20,23 +24,27 @@ class ModelState:
 
 model_state = ModelState()
 app = FastAPI()
-
-# Instrument FastAPI with OpenTelemetry
 FastAPIInstrumentor.instrument_app(app)
-
 def load_llm(model_name=DEFAULT_MODEL):
     """Load the language model"""
     with tracer.start_as_current_span("load_llm") as span:
         span.set_attribute("model.name", model_name)
+        start_time = time.time()
         try:
             logger.info(f"Attempting to load model: {model_name}")
             model_state.model = load_model(model_name, streaming=True)
             model_state.llm_loaded = True
             span.set_attribute("model.loaded", True)
-            logger.info(f"Model {model_name} loaded successfully")
+            
+            # Record model load time in Prometheus
+            load_time = time.time() - start_time
+            MODEL_LOAD_TIME.observe(load_time)
+            
+            logger.info(f"Model {model_name} loaded successfully in {load_time:.2f}s")
         except Exception as e:
             span.set_attribute("model.loaded", False)
             span.record_exception(e)
+            ERROR_COUNT.labels(error_type="model_load").inc()
             logger.error(f"Error loading model {model_name}: {e}")
             model_state.llm_loaded = False
             raise HTTPException(status_code=500, detail=f"Failed to load model {model_name}")
@@ -44,6 +52,11 @@ def load_llm(model_name=DEFAULT_MODEL):
 @app.on_event("startup")
 async def startup_event():
     logger.info("🚀 Starting up FastAPI server...")
+    
+    # Start memory monitoring in background thread
+    memory_thread = threading.Thread(target=monitor_memory_usage, daemon=True)
+    memory_thread.start()
+    logger.info("📊 Memory monitoring started")
     
     # Initialize database first
     try:
@@ -63,6 +76,10 @@ async def chat_endpoint(request: ChatRequest):
         logger.error("Model not loaded - rejecting chat request")
         raise HTTPException(status_code=503, detail="Model not loaded")
     
+    # Track request metrics
+    REQUEST_COUNT.inc()
+    start_time = time.time()
+    
     try:
         logger.info(f"Processing chat request for session: {request.session_id}")
         logger.info(f"Message: {request.message[:50]}...")  # Log first 50 chars
@@ -75,6 +92,10 @@ async def chat_endpoint(request: ChatRequest):
             ):
                 yield f"data: {json.dumps(chunk)}\n\n"
             yield "data: [DONE]\n\n"
+            
+            # Record latency after streaming completes
+            request_time = time.time() - start_time
+            LATENCY.observe(request_time)
         
         return StreamingResponse(
             generate(),
@@ -83,26 +104,14 @@ async def chat_endpoint(request: ChatRequest):
         )
     except Exception as e:
         logger.error(f"Error processing chat request: {e}")
+        ERROR_COUNT.labels(error_type="chat_request").inc()
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.delete("/chat/{session_id}")
-async def clear_conversation(session_id: str):
-    """Clear conversation history for a session"""
-    try:
-        # Import here to avoid circular imports
-        try:
-            from .database.postgres_memory import get_by_session_id
-        except ImportError:
-            from database.postgres_memory import get_by_session_id
-        
-        # Get the memory object and clear it
-        memory = get_by_session_id(session_id)
-        memory.clear()
-        
-        return {"message": f"Conversation {session_id} cleared"}
-    except Exception as e:
-        logger.error(f"Error clearing conversation {session_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to clear conversation")
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint"""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/health")
 async def health_check():
