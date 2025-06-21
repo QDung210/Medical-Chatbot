@@ -180,6 +180,25 @@ def generate_answer_stream(question: str, model, session_id: str = "default"):
         
         global _last_sources
         sources = _last_sources
+        
+        # Check if AI refused to answer or sources have low relevance
+        should_show_sources = True
+        
+        # Check refusal in response
+        if isinstance(result, str) and "tôi không thể" in result.lower():
+            should_show_sources = False
+        
+        # Check if highest score < 0.7 (low relevance)
+        elif sources and len(sources) > 0:
+            highest_score = max(source.get('score', 0) for source in sources)
+            if highest_score < 0.7:
+                should_show_sources = False
+        
+        # Clear sources if shouldn't show them
+        if not should_show_sources:
+            sources = []
+            span.set_attribute("sources_filtered", True)
+        
         span.set_attribute("sources.count", len(sources))
         
         # Check if result is a string
@@ -201,12 +220,13 @@ def generate_answer_stream(question: str, model, session_id: str = "default"):
                     'type': 'content'
                 }
         
-        # Send sources at the end
-        yield {
-            'content': '',
-            'sources': sources,
-            'type': 'sources'
-        }
+        # Send sources at the end (only if should show them)
+        if sources:
+            yield {
+                'content': '',
+                'sources': sources,
+                'type': 'sources'
+            }
         
         logger.info("Successfully completed response generation")
         
@@ -217,7 +237,7 @@ def generate_answer_stream(question: str, model, session_id: str = "default"):
         import traceback
         logger.error(traceback.format_exc())
         
-        # Return error message
+        # Return error message without sources
         error_message = "❓ Chatbot không có đủ thông tin đáng tin cậy để trả lời câu hỏi này."
         for char in error_message:
             yield {
