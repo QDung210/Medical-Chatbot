@@ -1,4 +1,6 @@
-.env
+.env/
+.env.local/
+!.env.docker/
 .cache/
 __pycache__/
 .conda/
