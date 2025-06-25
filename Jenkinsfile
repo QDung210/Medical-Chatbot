@@ -149,7 +149,7 @@ pipeline {
                         
                         # Wait for services startup
                         echo "Waiting for services to initialize..."
-                        sleep 30
+                        sleep 300
                         
                         # Health check
                         echo "=== SERVICE STATUS ==="
@@ -157,6 +157,11 @@ pipeline {
                         
                         echo "=== RUNNING CONTAINERS ==="
                         docker ps --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
+                        
+                        # Simple health checks
+                        echo "=== HEALTH CHECKS ==="
+                        curl -f http://localhost:6333/dashboard >/dev/null 2>&1 && echo "✅ Qdrant healthy" || echo "⚠️ Qdrant check failed"
+                        curl -f http://localhost:16686 >/dev/null 2>&1 && echo "✅ Jaeger healthy" || echo "⚠️ Jaeger check failed"
                         
                         echo "Deployment completed"
                     '''
