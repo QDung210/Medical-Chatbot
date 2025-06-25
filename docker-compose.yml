@@ -54,7 +54,6 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
     volumes:
-      - ./.env:/app/.env:ro
       - ./data:/app/data:ro
       - model_cache:/app/.cache
     networks:
