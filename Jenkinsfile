@@ -52,10 +52,13 @@ pipeline {
                         docker --version
                         docker-compose --version
                         
-                        # Clean up any existing containers
-                        docker-compose down -v 2>/dev/null || true
-                        
-                        echo "Pre-flight checks passed"
+                                            # Clean up any existing containers (aggressive cleanup)
+                    docker-compose down -v 2>/dev/null || true
+                    docker stop postgres_chatbot qdrant-local 2>/dev/null || true
+                    docker rm postgres_chatbot qdrant-local 2>/dev/null || true
+                    docker system prune -f 2>/dev/null || true
+                    
+                    echo "Pre-flight checks passed"
                     '''
                 }
             }
@@ -97,7 +100,7 @@ pipeline {
                             python:3.10-slim bash -c "
                                 pip install --no-cache-dir -r requirements.txt 2>/dev/null || echo 'Requirements installation attempted'
                                 python -m pytest test/ -v 2>/dev/null || echo 'Tests completed with warnings'
-                                python -c 'import sys; print(f\"Python {sys.version} - Test environment ready\")'
+                                python -c 'import sys; print(\"Python\", sys.version, \"- Test environment ready\")'
                             " || echo "RAG Pipeline testing completed"
                     '''
                 }
@@ -128,7 +131,7 @@ pipeline {
                     echo 'Building application containers...'
                     sh '''
                         # Build application services
-                        docker-compose build --no-cache rag_pipeline streamlit nginx
+                        docker-compose build --no-cache fastapi streamlit nginx
                         
                         echo "Application build completed"
                     '''
