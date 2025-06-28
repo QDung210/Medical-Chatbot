@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: model-serving
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 0.5
+            limits:
+              memory: 1Gi
+              cpu: 1
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: "medical_chatbot"
+            - name: POSTGRES_USER
+              value: "admin"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: medical-chatbot-secrets
+                  key: POSTGRES_PASSWORD
+            - name: TZ
+              value: "Asia/Ho_Chi_Minh"
+            - name: PGTZ
+              value: "Asia/Ho_Chi_Minh"
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - admin
+                - -d
+                - medical_chatbot
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - admin
+                - -d
+                - medical_chatbot
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: model-serving
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: model-serving
+spec:
+  selector:
+    app: postgres
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+  type: ClusterIP 
