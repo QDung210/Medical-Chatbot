@@ -1,0 +1,14 @@
+.env
+.env.local
+!.env.docker
+.cache/
+__pycache__/
+.conda/
+anaconda-navigator/
+*.pyc
+.vscode/
+kubernetes/secret.yaml
+kubernetes/*secret*.yaml
+*.secret.yaml
+.kube/
+kubeconfig
