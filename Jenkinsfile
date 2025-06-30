@@ -54,8 +54,8 @@ pipeline {
                         
                                             # Clean up any existing containers (aggressive cleanup)
                     docker-compose down -v 2>/dev/null || true
-                    docker stop postgres_chatbot qdrant-local 2>/dev/null || true
-                    docker rm postgres_chatbot qdrant-local 2>/dev/null || true
+                    docker stop medical-fastapi medical-streamlit medical-nginx grafana prometheus qdrant-local postgres_chatbot jaeger 2>/dev/null || true
+                    docker rm medical-fastapi medical-streamlit medical-nginx grafana prometheus qdrant-local postgres_chatbot jaeger 2>/dev/null || true
                     docker system prune -f 2>/dev/null || true
                     
                     echo "Pre-flight checks passed"
