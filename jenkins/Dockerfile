@@ -18,17 +18,38 @@ RUN groupadd docker || true && \
 RUN echo "jenkins ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/jenkins
 RUN chmod 0440 /etc/sudoers.d/jenkins
 
-# Copy entrypoint script
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# Create entrypoint script directly in Dockerfile
+RUN printf '#!/bin/bash\n\
+set -e\n\
+\n\
+echo "Checking Docker socket permissions..."\n\
+\n\
+if [ -S /var/run/docker.sock ]; then\n\
+    echo "Docker socket found. Fixing permissions..."\n\
+    sudo chown root:docker /var/run/docker.sock\n\
+    sudo chmod 664 /var/run/docker.sock\n\
+    echo "Docker socket permissions fixed"\n\
+else\n\
+    echo "Warning: Docker socket not found!"\n\
+fi\n\
+\n\
+echo "Starting Jenkins..."\n\
+exec /usr/bin/tini -- /usr/local/bin/jenkins.sh\n' > /usr/local/bin/entrypoint.sh && \
+    chmod +x /usr/local/bin/entrypoint.sh
 
 USER jenkins
 
-COPY . /var/jenkins_home/
-RUN sudo usermod -aG docker jenkins
-RUN sudo usermod -aG root jenkins
+# Jenkinsfile sẽ được mount bởi docker-compose volume, không cần COPY
+
+# Switch back to root to modify user groups
+USER root
+RUN usermod -aG docker jenkins
+RUN usermod -aG root jenkins
+
+# Switch back to jenkins user
+USER jenkins
 
 EXPOSE 8080 50000
 
-# Use entrypoint script to modify permissions at runtime
+# Use entrypoint script
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
