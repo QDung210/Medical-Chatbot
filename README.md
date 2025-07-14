@@ -6,7 +6,7 @@ It utilizes the **LLaMA-4 model**, known for its strong **multilingual capabilit
 
 📚 The medical knowledge base is constructed by **crawling data from trusted Vietnamese healthcare sources**, including **Vinmec**, **Nhà thuốc Long Châu**, and others. This allows the chatbot to provide **reliable and localized answers** in the medical domain.
 
-**Disclaimer**: `Medical-Chatbot` is provided for demonstration purposes only. It is configured to run on CPU to ensure compatibility with most hardware. However, you can enable GPU support by following the instructions in: [utils.py](rag_pipeline\src\utils.py). Additionally, the response length is limited to a fixed number of tokens, but you can fully customize this parameter in: [model_setup.py](rag_pipeline\src\model_setup.py)
+**Disclaimer**: `Medical-Chatbot` is provided for demonstration purposes only. It is configured to run on CPU to ensure compatibility with most hardware. However, you can enable GPU support by following the instructions in: [utils.py](rag_pipeline/src/utils.py). Additionally, the response length is limited to a fixed number of tokens, but you can fully customize this parameter in: [model_setup.py](rag_pipeline/src/model_setup.py)
 
 **Architecture** of the platform is as follows:   
 <img src="assets/architecture.png" alt="architecture" width="1024"/> 
