@@ -171,4 +171,7 @@ Use Jaeger tracing to monitor and troubleshoot request flows of the services.
 ## 3. CI/CD
 The CI/CD pipeline is triggered by GitHub commits from developers. Details on building CI/CD pipeline with Jenkins can be found in [jenkins](jenkins/README.md) directory. 
 
-<img src="jenkins\9.png" width="1024"/> 
+<img src="jenkins\images\9.png" width="1024"/> 
+
+## 4. Google Cloud Deployment
+- Details about deploying all services on a Google Cloud Platform (GCP) can be found in the  [google_cloud](google_cloud/README.md) directory.
